@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use gpui_kit::assets::{Assets, icon_assets};
 use gpui_kit::*;
 
-icon_assets!(Icons, [ArrowUpDown, Box, Compass, Download, House]);
+icon_assets!(Icons, [Box, Compass, Puzzle]);
 
 pub const LOGO: &str = "brand/lulo-64.png";
 

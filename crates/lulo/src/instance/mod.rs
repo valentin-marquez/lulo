@@ -2,6 +2,8 @@
 
 #[path = "create.view.rs"]
 pub mod create;
+#[path = "detail.view.rs"]
+pub mod detail;
 
 use gpui_kit::SharedString;
 
@@ -9,26 +11,59 @@ use gpui_kit::SharedString;
 pub struct Instance {
     pub id: SharedString,
     pub name: SharedString,
-    /// Human-readable game build, e.g. `42.12`.
-    pub build: SharedString,
-    pub mods: usize,
+    /// Steam branch the instance installs from, e.g. `public` or `legacy41`.
+    pub branch: SharedString,
+    pub status: Status,
     pub last_played: Option<SharedString>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Status {
+    Ready,
+    /// The branch has a newer build than the one installed.
+    Outdated,
+    /// Installing; percent done.
+    Downloading(u8),
 }
 
 // ponytail: placeholder data until instances are read from disk.
 pub fn samples() -> Vec<Instance> {
-    let make = |id: &str, name: &str, build: &str, mods, last: Option<&str>| Instance {
+    let make = |id: &str, name: &str, branch: &str, status, last: Option<&str>| Instance {
         id: id.to_owned().into(),
         name: name.to_owned().into(),
-        build: build.to_owned().into(),
-        mods,
+        branch: branch.to_owned().into(),
+        status,
         last_played: last.map(|l| l.to_owned().into()),
     };
     vec![
-        make("vanilla", "Vanilla", "42.12", 0, Some("2 days ago")),
-        make("brita", "Brita's Armory", "42.12", 38, Some("last week")),
-        make("legacy", "Legacy MP", "41.78.21", 112, Some("last month")),
-        make("fresh", "New instance", "42.12", 0, None),
+        make(
+            "vanilla",
+            "Vanilla",
+            "public",
+            Status::Ready,
+            Some("2 days ago"),
+        ),
+        make(
+            "brita",
+            "Brita's Armory",
+            "public",
+            Status::Outdated,
+            Some("last week"),
+        ),
+        make(
+            "legacy",
+            "Legacy MP",
+            "legacy41",
+            Status::Ready,
+            Some("last month"),
+        ),
+        make(
+            "fresh",
+            "New instance",
+            "public",
+            Status::Downloading(38),
+            None,
+        ),
     ]
 }
 

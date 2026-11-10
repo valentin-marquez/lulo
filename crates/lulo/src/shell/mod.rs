@@ -1,35 +1,44 @@
-//! Window frame: title bar on top, navigation rail on the left, the page on the right.
+//! Window frame: title bar, instance list on the left, the selected instance on the right.
 
-#[path = "rail.view.rs"]
-mod rail;
+#[path = "sidebar.view.rs"]
+mod sidebar;
 #[path = "topbar.view.rs"]
 mod topbar;
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 
-use crate::home::Home;
-use crate::instance;
-use rail::Rail;
+use crate::instance::{self, Instance, detail::Detail};
 use topbar::Topbar;
 
 pub struct Shell {
-    home: Entity<Home>,
+    instances: Vec<Instance>,
+    selected: usize,
+    detail: Entity<Detail>,
 }
 
 impl Shell {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         let instances = instance::samples();
+        let first = instances[0].clone();
         Self {
-            home: cx.new(|cx| Home::new(instances, window, cx)),
+            instances,
+            selected: 0,
+            detail: cx.new(|_| Detail::new(first)),
         }
+    }
+
+    fn select(&mut self, ix: usize, cx: &mut Context<Self>) {
+        self.selected = ix;
+        let instance = self.instances[ix].clone();
+        self.detail
+            .update(cx, |detail, cx| detail.show(instance, cx));
+        cx.notify();
     }
 }
 
 impl Render for Shell {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let recent = self.home.read(cx).recent();
-
         div()
             .flex()
             .flex_col()
@@ -42,7 +51,7 @@ impl Render for Shell {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .child(Rail::new(recent))
+                    .child(sidebar::render(self, cx))
                     .child(
                         div()
                             .flex_1()
@@ -53,7 +62,7 @@ impl Render for Shell {
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted)
                             .overflow_hidden()
-                            .child(self.home.clone()),
+                            .child(self.detail.clone()),
                     ),
             )
     }

@@ -1,5 +1,4 @@
 mod assets;
-mod home;
 mod instance;
 mod shell;
 mod theme;
@@ -37,7 +36,7 @@ fn main() {
         };
         gpui_kit::open_window(options, cx, |window, cx| {
             theme::follow_system(window, cx);
-            cx.new(|cx| Shell::new(window, cx))
+            cx.new(Shell::new)
         })
         .expect("failed to open main window");
     });

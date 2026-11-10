@@ -1,8 +1,6 @@
-//! Title bar: logo, where you are, and what is running.
+//! Title bar: logo and what is running.
 
-use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable, TitleBar};
+use gpui_kit::component::{ActiveTheme, TitleBar};
 use gpui_kit::*;
 
 use crate::assets::LOGO;
@@ -26,50 +24,29 @@ impl RenderOnce for Topbar {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(img(LOGO).size(px(20.)))
+                        .child(img(LOGO).size(px(18.)))
                         .child(
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("lulo"),
-                        )
-                        .child(div().text_color(theme.muted_foreground).child("/"))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .text_sm()
-                                .child(Icon::new(IconName::House).size_4())
-                                .child("Home"),
                         ),
                 )
+                // ponytail: static until launching exists (roadmap step 6).
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(
-                            Button::new("downloads")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Download),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .h(px(26.))
-                                .px_3()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(theme.border)
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
-                                .child("No instances running"),
-                        ),
+                        .h(px(24.))
+                        .px_3()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
+                        .child("Nothing running"),
                 ),
         )
     }

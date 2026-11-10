@@ -5,7 +5,6 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-repository = "https://github.com/valentin-marquez/lulo"
 
 [workspace.dependencies]
 gpui-kit = "0.9.1"

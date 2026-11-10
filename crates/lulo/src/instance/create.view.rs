@@ -65,7 +65,7 @@ impl Create {
             name: cx.new(|cx| InputState::new(window, cx).placeholder("New instance")),
             link: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("https://steamcommunity.com/sharedfiles/filedetails/?id=…")
+                    .placeholder("https://steamcommunity.com/sharedfiles/filedetails/?id=")
             }),
             path: cx.new(|cx| {
                 InputState::new(window, cx).placeholder("Folder with a Project Zomboid install")
@@ -240,10 +240,11 @@ impl Render for Create {
                 .child(
                     div().child(
                         Button::new("browse")
+                            .cursor_pointer()
                             .outline()
                             .small()
                             .icon(IconName::FolderOpen)
-                            .label("Browse…"),
+                            .label("Browse"),
                     ),
                 ),
             ),
@@ -307,6 +308,7 @@ impl Render for Create {
                     .child(
                         Button::new("cancel")
                             .outline()
+                            .cursor_pointer()
                             .label("Cancel")
                             // Same height and radius as the small FancyButton beside it.
                             .h(px(36.))

@@ -1,5 +1,7 @@
 mod assets;
+mod home;
 mod instance;
+mod screenshots;
 mod shell;
 mod theme;
 mod ui;

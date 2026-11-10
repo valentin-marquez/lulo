@@ -7,7 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Instance;
-use crate::ui::FancyButton;
+use crate::ui::{Empty, FancyButton, Meta};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -71,7 +71,7 @@ impl Detail {
         let theme = cx.theme();
         let instance = &self.instance;
         let played = match &instance.last_played {
-            Some(when) => format!("Last played {when}"),
+            Some(when) => format!("Played {when}"),
             None => "Never played".into(),
         };
 
@@ -108,15 +108,16 @@ impl Detail {
                     )
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .truncate()
-                            .child(format!("{}  ·  {played}", instance.branch)),
+                            .flex()
+                            .gap_4()
+                            .child(Meta::new(IconName::GitBranch, instance.branch.clone()))
+                            .child(Meta::new(IconName::Clock, played)),
                     ),
             )
             .child(
                 Button::new("settings")
                     .outline()
+                    .cursor_pointer()
                     .icon(IconName::Settings)
                     .size(px(40.))
                     .rounded(px(10.)),
@@ -157,33 +158,6 @@ impl Detail {
                     }))
             }))
     }
-
-    fn empty(&self, cx: &App) -> impl IntoElement {
-        let theme = cx.theme();
-        let (icon, title, line) = self.tab.empty();
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .rounded(theme.radius_lg)
-            .bg(theme.group_box)
-            .border_1()
-            .border_color(theme.border)
-            .child(Icon::new(icon).size_8().text_color(theme.muted_foreground))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(line),
-            )
-            .when(self.tab == Tab::Logs, |this| {
-                this.font_family(theme.mono_font_family.clone())
-            })
-    }
 }
 
 impl Render for Detail {
@@ -196,6 +170,9 @@ impl Render for Detail {
             .p_6()
             .child(self.header(cx))
             .child(self.tabs(cx))
-            .child(self.empty(cx))
+            .child({
+                let (icon, title, line) = self.tab.empty();
+                Empty::new(icon, title, line)
+            })
     }
 }

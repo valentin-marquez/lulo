@@ -3,9 +3,12 @@
 //! Accent fill with a 1px accent ring and a soft drop shadow, a white gloss that fades
 //! top to bottom (stronger on hover) and a faint highlight along the top edge.
 
+use gpui_kit::base::spring;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+use super::SPRING;
 
 #[derive(Clone, Copy, Default)]
 pub enum Size {
@@ -79,15 +82,24 @@ impl FancyButton {
 }
 
 impl RenderOnce for FancyButton {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let hovered = window.use_keyed_state(
+            SharedString::from(format!("fancy-hover-{}", self.id)),
+            cx,
+            |_, _| false,
+        );
+        let gloss = spring(
+            SharedString::from(format!("fancy-gloss-{}", self.id)),
+            if *hovered.read(cx) { 0.24 } else { 0.16 },
+            SPRING,
+            window,
+            cx,
+        );
         let accent = cx.theme().primary;
         let foreground = cx.theme().primary_foreground;
         let radius = self.size.radius();
-        let group = SharedString::from(format!("fancy-{}", self.id));
-
         div()
             .id(self.id)
-            .group(group.clone())
             .relative()
             .flex()
             .flex_none()
@@ -118,7 +130,11 @@ impl RenderOnce for FancyButton {
                     inset: false,
                 },
             ])
-            // Gloss: white fading to transparent, 16% at rest and 24% on hover.
+            .on_hover(move |is_hovered, window, cx| {
+                hovered.update(cx, |h, _| *h = *is_hovered);
+                window.refresh();
+            })
+            // Gloss: white fading to transparent, 16% at rest and 24% on hover, on a spring.
             .child(
                 div()
                     .absolute()
@@ -129,8 +145,7 @@ impl RenderOnce for FancyButton {
                         linear_color_stop(white(), 0.),
                         linear_color_stop(white().opacity(0.), 1.),
                     ))
-                    .opacity(0.16)
-                    .group_hover(group, |style| style.opacity(0.24)),
+                    .opacity(gloss),
             )
             // ponytail: AlignUI masks a 1px gradient ring; a top border is the visible part of it.
             .child(

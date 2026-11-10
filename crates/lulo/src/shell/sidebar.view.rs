@@ -1,24 +1,34 @@
-//! Left panel: every instance with its state, then new instance, settings and account.
+//! Left panel: pages, every instance with its state, then new instance, settings and account.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::Shell;
+use super::{Page, Shell};
 use crate::instance::{self, Status};
 
 const WIDTH: Pixels = px(248.);
 
-fn row(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
+fn row(id: impl Into<ElementId>, active: bool, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
     div()
         .id(id)
         .flex()
         .items_center()
         .gap_3()
         .p_2()
-        .rounded(cx.theme().radius)
+        .rounded(theme.radius)
+        .border_1()
         .cursor_pointer()
+        .map(|this| {
+            if active {
+                this.bg(theme.group_box).border_color(theme.border)
+            } else {
+                this.border_color(transparent_black())
+                    .hover(|s| s.bg(theme.sidebar_accent))
+            }
+        })
 }
 
 fn tile(icon: IconName, cx: &App) -> Div {
@@ -37,49 +47,54 @@ fn tile(icon: IconName, cx: &App) -> Div {
         .child(Icon::new(icon).size_4())
 }
 
-fn status(status: Status, branch: &str, cx: &App) -> Div {
+fn label(text: impl Into<SharedString>) -> Div {
+    div()
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .truncate()
+        .child(text.into())
+}
+
+fn status(status: Status, cx: &App) -> Div {
     let theme = cx.theme();
     let (text, color) = match status {
-        Status::Ready => (format!("Ready · {branch}"), theme.muted_foreground),
+        Status::Ready => ("Ready".to_string(), theme.muted_foreground),
         Status::Outdated => ("Update available".into(), theme.primary),
-        Status::Downloading(pct) => (format!("Downloading · {pct}%"), theme.muted_foreground),
+        Status::Downloading(pct) => (format!("Downloading {pct}%"), theme.muted_foreground),
     };
     div().text_xs().text_color(color).truncate().child(text)
 }
 
+fn nav(
+    page: Page,
+    icon: IconName,
+    text: &'static str,
+    shell: &Shell,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
+    row(text, shell.page == page, cx)
+        .child(tile(icon, cx))
+        .child(label(text))
+        .on_click(cx.listener(move |shell, _, _, cx| shell.go(page, cx)))
+}
+
 pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
+    let home = nav(Page::Home, IconName::House, "Home", shell, cx);
+    let screenshots = nav(Page::Screenshots, IconName::Image, "Screenshots", shell, cx);
     let theme = cx.theme();
 
     let instances = shell.instances.iter().enumerate().map(|(ix, instance)| {
-        let selected = ix == shell.selected;
-        row(instance.id.clone(), cx)
-            .map(|this| {
-                if selected {
-                    this.bg(theme.group_box)
-                        .border_1()
-                        .border_color(theme.border)
-                } else {
-                    this.border_1()
-                        .border_color(transparent_black())
-                        .hover(|s| s.bg(theme.sidebar_accent))
-                }
-            })
+        row(instance.id.clone(), shell.page == Page::Instance(ix), cx)
             .child(tile(IconName::Box, cx))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .min_w_0()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .truncate()
-                            .child(instance.name.clone()),
-                    )
-                    .child(status(instance.status, &instance.branch, cx)),
+                    .child(label(instance.name.clone()))
+                    .child(status(instance.status, cx)),
             )
-            .on_click(cx.listener(move |shell, _, _, cx| shell.select(ix, cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.go(Page::Instance(ix), cx)))
     });
 
     div()
@@ -88,43 +103,40 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
         .flex_none()
         .w(WIDTH)
         .px_2()
-        .pb_2()
+        .py_2()
         .gap_1()
         .bg(theme.sidebar)
+        .child(home)
+        .child(screenshots)
         .child(
             div()
+                .flex()
+                .justify_between()
                 .px_2()
-                .pt_2()
+                .pt_4()
                 .pb_1()
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.muted_foreground)
-                .child(format!("INSTANCES · {}", shell.instances.len())),
+                .child("INSTANCES")
+                .child(shell.instances.len().to_string()),
         )
         .children(instances)
         .child(div().flex_1())
         .child(
-            row("new", cx)
-                .hover(|s| s.bg(theme.sidebar_accent))
+            row("new", false, cx)
                 .child(tile(IconName::Plus, cx))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("New instance"),
-                )
+                .child(label("New instance"))
                 .on_click(|_, window, cx| instance::create::open(window, cx)),
         )
         .child(
-            row("settings", cx)
-                .hover(|s| s.bg(theme.sidebar_accent))
+            row("settings", false, cx)
                 .child(tile(IconName::Settings, cx))
                 .child(div().text_sm().child("Settings")),
         )
         // ponytail: placeholder until Steam login (roadmap step 4).
         .child(
-            row("account", cx)
-                .hover(|s| s.bg(theme.sidebar_accent))
+            row("account", false, cx)
                 .child(tile(IconName::CircleUser, cx))
                 .child(
                     div()

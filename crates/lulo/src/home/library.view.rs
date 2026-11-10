@@ -6,7 +6,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::*;
 
-use crate::instance::Instance;
+use crate::instance::{self, Instance};
 use crate::ui::FancyButton;
 
 const TILE: Pixels = px(168.);
@@ -101,7 +101,8 @@ impl RenderOnce for Library {
                     .child(
                         FancyButton::new("create", "Create instance")
                             .small()
-                            .icon(IconName::Plus),
+                            .icon(IconName::Plus)
+                            .on_click(|_, window, cx| instance::create::open(window, cx)),
                     ),
             )
             .child(

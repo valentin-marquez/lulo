@@ -4,6 +4,7 @@
 //! top to bottom (stronger on hover) and a faint highlight along the top edge.
 
 use gpui_kit::component::{ActiveTheme, Icon};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 #[derive(Clone, Copy, Default)]
@@ -42,7 +43,10 @@ pub struct FancyButton {
     label: SharedString,
     icon: Option<Icon>,
     size: Size,
+    on_click: Option<ClickHandler>,
 }
+
+type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 impl FancyButton {
     pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
@@ -51,6 +55,7 @@ impl FancyButton {
             label: label.into(),
             icon: None,
             size: Size::default(),
+            on_click: None,
         }
     }
 
@@ -61,6 +66,14 @@ impl FancyButton {
 
     pub fn small(mut self) -> Self {
         self.size = Size::Small;
+        self
+    }
+
+    pub fn on_click(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(handler));
         self
     }
 }
@@ -133,5 +146,6 @@ impl RenderOnce for FancyButton {
                     .map(|icon| div().relative().mx(px(-4.)).child(icon.size_5())),
             )
             .child(div().relative().child(self.label))
+            .when_some(self.on_click, |this, handler| this.on_click(handler))
     }
 }

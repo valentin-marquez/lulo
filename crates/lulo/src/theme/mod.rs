@@ -1,14 +1,28 @@
 //! Lulo's light and dark themes, switched with the system appearance.
 
+use std::borrow::Cow;
+
 use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry};
 use gpui_kit::*;
 
 const THEMES: &str = include_str!("lulo.theme.json");
+
+// Bundled so text looks the same on every OS; the themes name it as `font.family`.
+const FONTS: [&[u8]; 4] = [
+    include_bytes!("../../../../assets/fonts/Inter-Regular.ttf"),
+    include_bytes!("../../../../assets/fonts/Inter-Medium.ttf"),
+    include_bytes!("../../../../assets/fonts/Inter-SemiBold.ttf"),
+    include_bytes!("../../../../assets/fonts/Inter-Bold.ttf"),
+];
 const LIGHT: &str = "Lulo Light";
 const DARK: &str = "Lulo Dark";
 
 /// Registers the bundled themes and applies the one matching the system.
 pub fn init(cx: &mut App) {
+    cx.text_system()
+        .add_fonts(FONTS.map(Cow::Borrowed).to_vec())
+        .expect("bundled fonts are valid");
+
     let registry = ThemeRegistry::global_mut(cx);
     registry
         .load_themes_from_str(THEMES)

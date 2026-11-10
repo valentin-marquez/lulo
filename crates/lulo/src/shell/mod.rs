@@ -51,7 +51,7 @@ impl Render for Shell {
                             .border_t_1()
                             .border_l_1()
                             .border_color(cx.theme().border)
-                            .bg(cx.theme().background)
+                            .bg(cx.theme().muted)
                             .overflow_hidden()
                             .child(self.home.clone()),
                     ),

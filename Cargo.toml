@@ -15,3 +15,7 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# GPUI is very slow unoptimized; optimize dependencies, keep our crate fast to rebuild.
+[profile.dev.package."*"]
+opt-level = 2

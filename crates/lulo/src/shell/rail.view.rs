@@ -5,7 +5,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::instance::Instance;
+use crate::instance::{self, Instance};
 
 const WIDTH: Pixels = px(60.);
 const ITEM: Pixels = px(40.);
@@ -82,7 +82,10 @@ impl RenderOnce for Rail {
                             .child(Icon::new(IconName::Box).size_5())
                     }))
                     .child(divider(cx))
-                    .child(item("new", IconName::Plus, false, cx)),
+                    .child(
+                        item("new", IconName::Plus, false, cx)
+                            .on_click(|_, window, cx| instance::create::open(window, cx)),
+                    ),
             )
             .child(item("settings", IconName::Settings, false, cx))
     }

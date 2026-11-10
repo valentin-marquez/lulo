@@ -5,10 +5,11 @@
     {
       "name": "Lulo Light",
       "mode": "light",
+      "font.family": "Inter",
       "radius": 10,
       "radius.lg": 14,
       "colors": {
-        "background": "#f1efec",
+        "background": "#ffffff",
         "foreground": "#1c1917",
         "border": "#e6e2dd",
         "ring": "#f85303",
@@ -27,7 +28,7 @@
 
         "accent.background": "#ece9e5",
         "accent.foreground": "#1c1917",
-        "muted.background": "#f5f3f1",
+        "muted.background": "#f1efec",
         "muted.foreground": "#78716c",
 
         "group_box.background": "#ffffff",
@@ -56,10 +57,11 @@
     {
       "name": "Lulo Dark",
       "mode": "dark",
+      "font.family": "Inter",
       "radius": 10,
       "radius.lg": 14,
       "colors": {
-        "background": "#1f1b19",
+        "background": "#2a2522",
         "foreground": "#f5f5f4",
         "border": "#38312d",
         "ring": "#f85303",
@@ -78,7 +80,7 @@
 
         "accent.background": "#332d29",
         "accent.foreground": "#f5f5f4",
-        "muted.background": "#2a2522",
+        "muted.background": "#1f1b19",
         "muted.foreground": "#a8a29e",
 
         "group_box.background": "#2a2522",

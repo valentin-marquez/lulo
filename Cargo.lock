@@ -3493,6 +3493,7 @@ dependencies = [
  "embed-resource",
  "gpui-kit",
  "image",
+ "serde_json",
 ]
 
 [[package]]

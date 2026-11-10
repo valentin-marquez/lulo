@@ -3490,6 +3490,7 @@ dependencies = [
 name = "lulo"
 version = "0.1.0"
 dependencies = [
+ "embed-resource",
  "gpui-kit",
  "image",
 ]

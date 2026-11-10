@@ -3,7 +3,8 @@ use std::sync::Arc;
 use gpui_kit::base::StyledExt;
 use gpui_kit::*;
 
-const APP_ID: &str = "lulo";
+// Must match the .desktop file name so Wayland compositors resolve the icon.
+const APP_ID: &str = "io.github.valentin_marquez.Lulo";
 const ICON_PNG: &[u8] = include_bytes!("../../../assets/icons/png/lulo-256.png");
 
 struct Launcher;

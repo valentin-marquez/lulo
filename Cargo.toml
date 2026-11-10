@@ -9,6 +9,7 @@ repository = "https://github.com/valentin-marquez/lulo"
 
 [workspace.dependencies]
 gpui-kit = "0.9.1"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

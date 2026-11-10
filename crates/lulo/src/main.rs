@@ -32,6 +32,11 @@ fn main() {
             icon: window_icon(),
             window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
             window_min_size: Some(size(px(900.), px(600.))),
+            titlebar: Some(TitlebarOptions {
+                // Centre macOS traffic lights in the taller title bar.
+                traffic_light_position: Some(point(px(16.), px(17.))),
+                ..TitleBar::title_bar_options()
+            }),
             ..TitleBar::window_options()
         };
         gpui_kit::open_window(options, cx, |window, cx| {

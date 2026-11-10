@@ -5,6 +5,9 @@ use gpui_kit::*;
 
 use crate::assets::LOGO;
 
+/// Taller than gpui-component's 34px default so the header carries the window.
+pub const HEIGHT: Pixels = px(48.);
+
 #[derive(IntoElement)]
 pub struct Topbar;
 
@@ -12,19 +15,19 @@ impl RenderOnce for Topbar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
 
-        TitleBar::new().child(
+        TitleBar::new().h(HEIGHT).child(
             div()
                 .flex()
                 .flex_1()
                 .items_center()
                 .justify_between()
-                .pr_2()
+                .pr_3()
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(img(LOGO).size(px(18.)))
+                        .child(img(LOGO).size(px(24.)))
                         .child(
                             div()
                                 .text_sm()
@@ -38,7 +41,7 @@ impl RenderOnce for Topbar {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .h(px(24.))
+                        .h(px(28.))
                         .px_3()
                         .rounded_full()
                         .border_1()

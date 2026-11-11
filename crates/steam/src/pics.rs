@@ -108,6 +108,49 @@ pub fn branches(appinfo: &Map) -> Vec<Branch> {
         .collect()
 }
 
+/// A depot to install and the manifest it uses on the chosen branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Depot {
+    pub id: u32,
+    pub manifest: u64,
+    /// Install size in bytes, when appinfo has it.
+    pub size: Option<u64>,
+}
+
+/// Depots that make up `branch` on `os` (`windows`, `linux` or `macos`): those with a manifest on
+/// that branch whose `oslist` is empty or includes `os`. Depots borrowed from other apps
+/// (redistributables) carry no manifest here and are skipped.
+pub fn depots(appinfo: &Map, branch: &str, os: &str) -> Vec<Depot> {
+    let Some(all) = appinfo.map("depots") else {
+        return Vec::new();
+    };
+    all.iter()
+        .filter_map(|(key, value)| {
+            let id: u32 = key.parse().ok()?;
+            let keyvalues::Value::Map(depot) = value else {
+                return None;
+            };
+            let oslist = depot
+                .map("config")
+                .and_then(|c| c.str("oslist"))
+                .unwrap_or("");
+            if !oslist.is_empty() && !oslist.split(',').any(|o| o.trim() == os) {
+                return None;
+            }
+            // Current appinfo nests {gid, size}; older entries are just the gid.
+            let (manifest, size) = match depot.map("manifests")?.get(branch)? {
+                keyvalues::Value::Map(m) => (m.str("gid")?, m.str("size")),
+                keyvalues::Value::Str(gid) => (gid.as_str(), None),
+            };
+            Some(Depot {
+                id,
+                manifest: manifest.parse().ok()?,
+                size: size.and_then(|s| s.parse().ok()),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +182,48 @@ mod tests {
         assert_eq!(branches[1].description.as_deref(), Some("Build 41.78.21"));
         assert_eq!(branches[0].updated, Some(1793974760));
         assert!(branches[2].password_required);
+    }
+
+    #[test]
+    fn picks_depots_for_branch_and_os() {
+        // Shape of PZ's appinfo (app 108600): per-OS game depots, a manifest-less depot and
+        // Windows redistributables borrowed from another app.
+        let text = r#"
+            "appinfo" { "depots" {
+                "108601" { "systemdefined" "1" }
+                "108603" { "config" { "oslist" "linux" } "manifests" {
+                    "public" { "gid" "111" "size" "4000" }
+                    "legacy41" { "gid" "222" "size" "3000" } } }
+                "108604" { "config" { "oslist" "windows" } "manifests" { "public" { "gid" "333" } } }
+                "228983" { "config" { "oslist" "windows" } "depotfromapp" "228980" }
+                "380871" { "manifests" { "public" "444" } }
+                "branches" { "public" { "buildid" "1" } }
+            } }
+        "#;
+        let info = keyvalues::parse(text)
+            .unwrap()
+            .map("appinfo")
+            .unwrap()
+            .clone();
+
+        let linux: Vec<_> = depots(&info, "public", "linux")
+            .iter()
+            .map(|d| (d.id, d.manifest))
+            .collect();
+        assert_eq!(linux, [(108603, 111), (380871, 444)]);
+        let old = depots(&info, "legacy41", "linux");
+        assert_eq!(
+            old,
+            [Depot {
+                id: 108603,
+                manifest: 222,
+                size: Some(3000)
+            }]
+        );
+        let windows: Vec<_> = depots(&info, "public", "windows")
+            .iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(windows, [108604, 380871]);
     }
 }

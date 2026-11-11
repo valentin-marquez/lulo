@@ -89,10 +89,13 @@ pub async fn manifest(
     manifest::parse(&zip, key)
 }
 
+/// Chunks downloaded at once. Order is kept, so files are still written front to back.
+const PARALLEL: usize = 16;
+
 /// Writes every file of `manifest` under `dir`, verifying each chunk and each whole file.
 /// `progress` receives the bytes written so far.
-// ponytail: one chunk at a time and no resume; parallel downloads and reusing chunks already on
-// disk (updates between builds) come with the install step of the roadmap.
+// ponytail: no resume, and every chunk is downloaded; reusing chunks already on disk (updates
+// between builds) comes with the updates step of the roadmap.
 pub async fn install(
     http: &reqwest::Client,
     host: &str,
@@ -102,49 +105,104 @@ pub async fn install(
     dir: &Path,
     mut progress: impl FnMut(u64),
 ) -> Result<()> {
-    let mut done = 0;
+    use futures_util::{StreamExt, stream};
+
+    // Folders and empty files first; everything else is written as its chunks arrive.
     for file in &manifest.files {
-        let path = dir.join(&file.path);
-        // `manifest::parse` already refuses unsafe paths; this keeps install safe on its own.
-        if !path.starts_with(dir) {
-            return Err(Error::Packet("path escapes the install folder"));
-        }
+        let path = target(dir, &file.path)?;
         if file.is_dir {
             tokio::fs::create_dir_all(&path).await?;
-            continue;
-        }
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let mut out = tokio::fs::File::create(&path).await?;
-        let mut hash = Sha1::new();
-        let mut written = 0u64;
-        for c in &file.chunks {
-            // Chunks are sorted by offset; they must tile the file with no gaps or overlaps.
-            if c.offset != written || written + c.original as u64 > file.size {
-                return Err(Error::Packet("chunks don't tile the file"));
+        } else if file.chunks.is_empty() {
+            if file.size != 0 {
+                return Err(Error::Packet("file has a size but no chunks"));
             }
-            let url = format!("https://{host}/depot/{depot}/chunk/{}", c.id());
-            let raw =
-                crate::read_capped(http.get(url).send().await?, c.compressed as usize, "chunk")
-                    .await?;
-            let plain = chunk::open(key, &raw, c)?;
-            out.write_all(&plain).await?;
-            hash.update(&plain);
-            written += plain.len() as u64;
-            done += plain.len() as u64;
-            progress(done);
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::File::create(&path).await?;
+            executable(&path).await?;
         }
-        out.flush().await?;
-        if written != file.size
-            || (file.size > 0 && hash.finalize().as_slice() != file.sha.as_slice())
-        {
-            return Err(Error::Packet("file failed verification"));
+    }
+
+    let jobs = manifest
+        .files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !f.is_dir)
+        .flat_map(|(ix, f)| f.chunks.iter().map(move |c| (ix, c)));
+    let mut chunks = stream::iter(jobs.map(|(ix, c)| async move {
+        let url = format!("https://{host}/depot/{depot}/chunk/{}", c.id());
+        let raw =
+            crate::read_capped(http.get(url).send().await?, c.compressed as usize, "chunk").await?;
+        Ok::<_, Error>((ix, c, chunk::open(key, &raw, c)?))
+    }))
+    .buffered(PARALLEL);
+
+    let mut open: Option<Open> = None;
+    let mut done = 0;
+    while let Some(next) = chunks.next().await {
+        let (ix, c, plain) = next?;
+        if open.as_ref().is_none_or(|o| o.ix != ix) {
+            if let Some(previous) = open.take() {
+                previous.finish(manifest).await?;
+            }
+            let path = target(dir, &manifest.files[ix].path)?;
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            open = Some(Open {
+                ix,
+                out: tokio::fs::File::create(&path).await?,
+                path,
+                hash: Sha1::new(),
+                written: 0,
+            });
         }
-        executable(&path).await?;
+        let file = open.as_mut().expect("opened above");
+        // Chunks are sorted by offset; they must tile the file with no gaps or overlaps.
+        if c.offset != file.written || file.written + plain.len() as u64 > manifest.files[ix].size {
+            return Err(Error::Packet("chunks don't tile the file"));
+        }
+        file.out.write_all(&plain).await?;
+        file.hash.update(&plain);
+        file.written += plain.len() as u64;
+        done += plain.len() as u64;
+        progress(done);
+    }
+    if let Some(last) = open {
+        last.finish(manifest).await?;
     }
     Ok(())
+}
+
+/// The file being written while its chunks stream in.
+struct Open {
+    ix: usize,
+    path: std::path::PathBuf,
+    out: tokio::fs::File,
+    hash: Sha1,
+    written: u64,
+}
+
+impl Open {
+    async fn finish(mut self, manifest: &Manifest) -> Result<()> {
+        let file = &manifest.files[self.ix];
+        self.out.flush().await?;
+        if self.written != file.size || self.hash.finalize().as_slice() != file.sha.as_slice() {
+            return Err(Error::Packet("file failed verification"));
+        }
+        executable(&self.path).await
+    }
+}
+
+/// `dir/path`, refusing anything that would land outside `dir`. `manifest::parse` already
+/// rejects unsafe paths; this keeps install safe on its own.
+fn target(dir: &Path, path: &str) -> Result<std::path::PathBuf> {
+    let joined = dir.join(path);
+    if !joined.starts_with(dir) {
+        return Err(Error::Packet("path escapes the install folder"));
+    }
+    Ok(joined)
 }
 
 /// Manifests carry no executable bit; SteamCMD creates every file 0755 on Unix, and the game's

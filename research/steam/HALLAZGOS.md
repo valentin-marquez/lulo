@@ -1,10 +1,10 @@
-# Steam nativo: hallazgos de ingeniería inversa
+# Steam nativo, hallazgos de ingeniería inversa
 
 Build analizado: SteamCMD `1792617903` (steamclient.so / steamconsole.so de 2026-10).
 Leyenda: **[verificado]** = comprobado con bytes reales; **[observado]** = visto en logs de una ejecución real; **[pendiente]** = falta confirmar.
 
 ## 1. Esquemas
-- `protos/`: 109 `.proto` extraídos de `steamclient.so` (`extract_protos.py`, `render_protos.py`). **[verificado]**: el set cierra sin deps faltantes.
+- `protos/`, 109 `.proto` extraídos de `steamclient.so` (`extract_protos.py`, `render_protos.py`). **[verificado]**: el set cierra sin deps faltantes.
 - `protos/steamclient.fds.pb` → `prost_build::Config::compile_fds()` en Rust.
 - EMsg relevantes (`enums_clientserver.proto`): Multi=1, ServiceMethodResponse=147, ServiceMethodCallFromClient=151, ClientHeartBeat=703, ClientLogOnResponse=751, ChannelEncrypt*=1303-1305, ClientGetDepotDecryptionKey=5438/5439, ClientLogon=5514, ClientPICSProductInfo=8903/8904, ClientHello=9805.
 
@@ -12,7 +12,7 @@ Leyenda: **[verificado]** = comprobado con bytes reales; **[observado]** = visto
 1. `GET ISteamDirectory/GetCMListForConnect/?cellid=0&qoslevel=3` → CMs Netfilter (TCP) y WebSocket.
 2. Ping a varios, conecta por **WebSocket a `cmpN-<dc>.steamserver.net:443`** (sin handshake ChannelEncrypt: va sobre TLS).
 3. `ClientLogon` anónimo → `ClientLogOnResponse OK`, SteamID `[a:1:N]` (cuenta anónima, universo 1).
-4. Login de usuario (pendiente de analizar): servicio `Authentication` (GetPasswordRSAPublicKey → BeginAuthSessionViaCredentials → UpdateAuthSessionWithSteamGuardCode → PollAuthSessionStatus → refresh token → ClientLogon con token).
+4. Login de usuario: ver §12.
 
 ## 3. App info (PICS)  **[observado]**
 - PICS por CM; el contenido grande de appinfo se baja **por HTTP** ("Downloaded 1 apps via HTTP").
@@ -69,7 +69,7 @@ Con implementación nativa estos estados son nuestros; sirven solo como referenc
   - 380870 servidor: 380871 (común, sin oslist) + 380872 mac / 380873 linux / 380874 windows. 1004-1006 = Steamworks redist. **Anónimo: clave OK en todos**.
   - 108600 juego: 108601 (sin manifests), 108602 mac / 108603 linux / 108604 windows; 228983-7 = redist Windows. **Anónimo: eresult 15 (AccessDenied)** → requiere cuenta que lo tenga.
 - Para instalar una versión: elegir rama → para cada depot cuyo `oslist` incluya el SO (o vacío) y tenga manifest en esa rama → descargar ese gid.
-- Pendiente: si se pueden pedir manifests **antiguos fuera de las ramas** (fijar build arbitrario). No probado.
+- Pendiente: si se pueden pedir manifests **antiguos fuera de las ramas** (fijar build arbitrario), no probado.
 
 ## 9. Versiones de mods  **[verificado]** (anónimo)
 - `PublishedFile.GetChangeHistory {publishedfileid, count}` → `changes[]` con `timestamp`, `change_description` (changelog), `manifest_id` por versión, y `snapshot_game_branch_min/max` (rango de ramas del juego; vacío en los mods probados).
@@ -91,9 +91,49 @@ Con implementación nativa estos estados son nuestros; sirven solo como referenc
 - Reimplementación: rama = qué `manifests.<rama>.gid` usar por depot + `app_branch` en `GetManifestRequestCode`. Ramas con `pwdrequired` necesitarían CheckAppBetaPassword (PZ no tiene).
 - Importar una instalación de Steam: leer `UserConfig.BetaKey`/`MountedConfig.BetaKey` y `buildid` del acf; comparar con `depots.branches.<rama>.buildid` de PICS para saber versión y si hay actualización.
 
+## 12. Login de usuario (servicio Authentication)  (2026-11-11, `auth_probe.py`, sin credenciales reales: cuenta inventada)
+Mensajes en `protos/steammessages_auth.steamclient.proto`. Tokens = **JWT EdDSA** (`{ "typ": "JWT", "alg": "EdDSA" }` en steamclient.so).
+
+**Transporte**  **[verificado]**
+- Van **por el socket CM**, no por la web API: steamclient.so tiene `CClientServiceMethodRPCImpl<AuthenticationService::C...>` y los nombres `Authentication.GetPasswordRSAPublicKey#1`, `...UpdateAuthSessionWithSteamGuardCode#1`, `...GenerateAccessTokenForApp#1`.
+- **Antes de `ClientLogon`**: `ClientHello` y luego EMsg **9804** `ServiceMethodCallFromClientNonAuthed` (mismo formato que 151: `target_job_name`, `jobid_source`; respuesta 147).
+- Cabecera **`steamid = 0`**, `client_sessionid = 0`. Con steamid anónimo (`0x01A0...`) el servidor responde EMsg 113 `DestJobFailed` (no protobuf).
+
+**1. RSA**
+- `GetPasswordRSAPublicKey {account_name}` → `{publickey_mod (hex), publickey_exp (hex), timestamp}`. **[verificado]**: responde también para cuentas inexistentes; módulo 2048 bits, exp `010001`, timestamp tipo `86893800000`.
+- Cifrado: RSA **PKCS#1 v1.5** del password UTF-8 → base64 → `encrypted_password`; `encryption_timestamp` = el `timestamp` recibido. **[pendiente]**: con cuenta inexistente el servidor devuelve eresult 5 (`InvalidPassword`) igual para PKCS1 correcto, bytes aleatorios, timestamp alterado o vacío → no distingue; confirmar con cuenta real. (PKCS#1 v1.5 es lo que usan SteamKit2/steam-session.)
+
+**2. Iniciar sesión**
+- `BeginAuthSessionViaCredentials {device_friendly_name, account_name, encrypted_password, encryption_timestamp, remember_login, platform_type=1 (SteamClient), persistence=1 (Persistent), website_id, device_details{device_friendly_name, platform_type, os_type, machine_id}, guard_data}` **[verificado parcial]**: el servidor lo parsea y devuelve eresult 5 con cuenta inexistente.
+- Respuesta (éxito, **[pendiente]**): `{client_id, request_id, interval, allowed_confirmations[], steamid, weak_token, extended_error_message}`.
+- `guard_data` = el `new_guard_data` de un login anterior → evita pedir el código de email otra vez (machine token). [pendiente]
+- Alternativa QR: `BeginAuthSessionViaQR {device_friendly_name, platform_type, device_details}` → `{client_id, request_id (16 B), interval=5, challenge_url="https://s.team/q/1/<client_id>...", allowed_confirmations=[4,3]}` **[verificado]**. `device_friendly_name` es lo que el usuario ve en su app de Steam.
+
+**3. Steam Guard**  (enum `EAuthSessionGuardType`)
+- 1 None → solo hacer polling. 2 EmailCode → código del correo. 3 DeviceCode → TOTP del autenticador móvil. 4 DeviceConfirmation → aprobar en la app (solo polling). 5 EmailConfirmation → clic en el correo (solo polling). 6 MachineToken (guard_data válido). 7 LegacyMachineAuth.
+- Con código: `UpdateAuthSessionWithSteamGuardCode {client_id, steamid, code, code_type (2 o 3)}`, luego seguir con el polling. [pendiente con cuenta real]
+- `allowed_confirmations` viene ordenado por preferencia; la UI ofrece la primera y deja cambiar.
+
+**4. Polling**
+- `PollAuthSessionStatus {client_id, request_id}` cada `interval` s. **[verificado]** sesión pendiente → eresult 1 con solo `had_remote_interaction` (false).
+- Éxito → `{refresh_token, access_token, account_name, new_guard_data, new_client_id, new_challenge_url}`. En QR, `new_challenge_url` = el QR rota: hay que redibujarlo. [pendiente]
+- Expiración o rechazo: eresult distinto de 1 (esperado 9 FileNotFound / 27 Expired). [pendiente]
+
+**5. ClientLogon con token**  [pendiente con cuenta real]
+- `CMsgClientLogon`: `access_token` (campo 108) = **el refresh token**; `account_name` (50); `should_remember_password` (8) = true; `machine_id` (30); `machine_name` (96); `client_os_type` (7); `protocol_version` (1); `supports_rate_limit_response` (102). Sin `password`.
+- Cabecera: steamid individual del universo público (`0x0110000100000000`, o el `steamid` de la sesión de auth) y session 0.
+
+**6. Renovación**  [pendiente]
+- `GenerateAccessTokenForApp {refresh_token, steamid, renewal_type=1 (Allow)}` → `{access_token, refresh_token}`; con Allow, Steam puede devolver un refresh token nuevo cerca del vencimiento → reemplazarlo en el llavero. **[verificado]** con token basura por 9804 → eresult 15 (AccessDenied); falta probar con token real (y si exige sesión autenticada por 151).
+- Vigencia: viene en el claim `exp` del JWT (decodificar el payload base64url). Revocación: `RevokeRefreshToken` o Steam → Dispositivos autorizados.
+
+**7. Tras el login (108600)**  [pendiente con cuenta real]
+- Esperado: `ClientGetDepotDecryptionKey` para 108602/108603/108604 → eresult 1 si la cuenta tiene PZ.
+- PICS anónimo ya devolvió los manifests de 108600 sin access token (`missing_token=False`), así que solo hace falta el request code; confirmar que `GetManifestRequestCode` acepta la cuenta logueada.
+
 ## Pendiente
+- Confirmar §12 con una cuenta real (requiere que el usuario inicie sesión él mismo).
 - Actualizar una instancia entre builds: diff de manifests y reutilizar chunks existentes (SteamCMD reporta "reuse/delta").
 - Dependencias de mods (`children` en GetDetails con `includechildren`).
 - Heartbeat (`ClientHeartBeat` 703 cada `heartbeat_seconds`) para sesiones largas: aún no implementado (las pruebas duran < 9 s).
-- Login de usuario + Steam Guard + refresh token (para 108600 cliente).
 - Valores reales de `client_os_type` y `protocol_version` del binario (hoy son hipótesis aceptadas por el servidor).

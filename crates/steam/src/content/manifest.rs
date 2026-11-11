@@ -14,6 +14,8 @@ const METADATA: u32 = 0x1F48_12BE;
 const SIGNATURE: u32 = 0x1B81_B817;
 const END: u32 = 0x32C4_15AB;
 const DIRECTORY: u32 = 64;
+/// Steam chunks are at most 1 MiB; anything bigger is a broken or hostile manifest.
+const CHUNK_CAP: u32 = 16 << 20;
 /// Manifests of full game depots are a few MB; this only stops garbage.
 const CAP: u64 = 256 << 20;
 
@@ -114,6 +116,12 @@ pub fn parse(zip: &[u8], key: &Key) -> Result<Manifest> {
                 compressed: c.cb_compressed.unwrap_or(0),
             })
             .collect();
+        if chunks
+            .iter()
+            .any(|c| c.original > CHUNK_CAP || c.compressed > CHUNK_CAP)
+        {
+            return Err(Error::Packet("chunk larger than Steam ever makes"));
+        }
         chunks.sort_by_key(|c| c.offset);
         files.push(File {
             path: safe_path(&name)?,
@@ -130,16 +138,32 @@ pub fn parse(zip: &[u8], key: &Key) -> Result<Manifest> {
     })
 }
 
-/// Normalizes `\` to `/` and refuses absolute paths or `..`, so a manifest can't write outside
-/// the install folder.
+/// Normalizes `\\` to `/` and accepts only plain relative components, so a manifest can't write
+/// outside the install folder on any OS.
 fn safe_path(name: &str) -> Result<String> {
+    use std::path::{Component, Path};
+
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
     let path = name.replace('\\', "/");
-    let bad = path.starts_with('/')
-        || path.contains(':')
-        || path
-            .split('/')
-            .any(|part| part == ".." || part.is_empty() && !path.is_empty());
-    if bad || path.is_empty() {
+    let parts_ok = !path.is_empty()
+        && path.split('/').all(|part| {
+            let stem = part.split('.').next().unwrap_or(part);
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && !part.ends_with(['.', ' '])
+                && !part
+                    .chars()
+                    .any(|c| c.is_control() || matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*'))
+                && !RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem))
+        });
+    let components_ok = Path::new(&path)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)));
+    if !parts_ok || !components_ok {
         return Err(Error::Packet("unsafe path in manifest"));
     }
     Ok(path)
@@ -227,7 +251,15 @@ mod tests {
     #[test]
     fn refuses_paths_outside_the_install() {
         let key = [4u8; 32];
-        for evil in ["..\\..\\evil", "/etc/passwd", "C:\\evil", "a\\\\b"] {
+        for evil in [
+            "..\\..\\evil",
+            "/etc/passwd",
+            "C:\\evil",
+            "a\\\\b",
+            "mods\\CON.txt",
+            "mods\\trailing.",
+            "mods\\bad\u{1}name",
+        ] {
             assert!(
                 parse(&manifest_zip(&[(evil, 0)], &key), &key).is_err(),
                 "{evil}"

@@ -44,7 +44,8 @@ fn le_u32(bytes: &[u8]) -> u32 {
 
 /// `size` is the expected output length; it bounds every decoder.
 fn decompress(buf: &[u8], size: usize) -> Result<Vec<u8>> {
-    let mut out = Vec::with_capacity(size);
+    // Grown as data arrives instead of trusting `size` up front.
+    let mut out = Vec::new();
     if buf.starts_with(b"VSZa") {
         // "VSZa" | crc u32 | zstd frame | crc u32 | size u32 | u32 0 | "zsv"
         if buf.len() < 23 || !buf.ends_with(b"zsv") {

@@ -105,6 +105,10 @@ pub async fn install(
     let mut done = 0;
     for file in &manifest.files {
         let path = dir.join(&file.path);
+        // `manifest::parse` already refuses unsafe paths; this keeps install safe on its own.
+        if !path.starts_with(dir) {
+            return Err(Error::Packet("path escapes the install folder"));
+        }
         if file.is_dir {
             tokio::fs::create_dir_all(&path).await?;
             continue;

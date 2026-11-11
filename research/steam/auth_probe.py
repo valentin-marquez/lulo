@@ -80,7 +80,10 @@ def main():
 
     # --- C. GenerateAccessTokenForApp con token basura ---
     rg = c.M('CAuthentication_AccessToken_GenerateForApp_Request')
-    rg.refresh_token = 'eyAidHlwIjogIkpXVCIsICJhbGciOiAiRWREU0EiIH0.e30.AAAA'; rg.steamid = 76561197960265728
+    # Token falso armado aquí (cabecera JWT válida, payload vacío, firma basura): no es un secreto.
+    b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
+    rg.refresh_token = '.'.join([b64(b'{"typ":"JWT","alg":"EdDSA"}'), b64(b'{}'), 'AAAA'])
+    rg.steamid = 76561197960265728  # SteamID base, sin cuenta
     rg.renewal_type = 1
     er, msg, gr = call(cm, 'Authentication.GenerateAccessTokenForApp', rg,
                        'CAuthentication_AccessToken_GenerateForApp_Response', NONAUTHED)

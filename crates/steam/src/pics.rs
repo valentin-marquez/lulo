@@ -65,20 +65,7 @@ pub async fn app_info(client: &mut Client, http: &reqwest::Client, appid: u32) -
                 Ok(reply) => reply,
                 Err(_) => http.get(format!("http://{path}")).send().await?,
             };
-            let mut reply = reply.error_for_status()?;
-            if reply
-                .content_length()
-                .is_some_and(|n| n > COMPRESSED_CAP as u64)
-            {
-                return Err(Error::TooLarge("appinfo download"));
-            }
-            let mut gz = Vec::new();
-            while let Some(chunk) = reply.chunk().await? {
-                if gz.len() + chunk.len() > COMPRESSED_CAP {
-                    return Err(Error::TooLarge("appinfo download"));
-                }
-                gz.extend_from_slice(&chunk);
-            }
+            let gz = crate::read_capped(reply, COMPRESSED_CAP, "appinfo download").await?;
             crate::gunzip(&gz, TEXT_CAP, "appinfo")?
         }
     };

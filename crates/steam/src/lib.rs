@@ -3,9 +3,11 @@
 //! Protocol notes and the reference implementation live outside the repo (see CLAUDE.md).
 
 pub mod cm;
+pub mod content;
 pub mod directory;
 pub mod keyvalues;
 pub mod pics;
+pub mod workshop;
 
 #[allow(clippy::all, missing_docs)]
 pub mod proto {
@@ -51,6 +53,26 @@ pub fn http() -> reqwest::Client {
 fn tls() {
     // Err only means it was already installed.
     let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+/// Reads a response body, refusing more than `cap` bytes (by header and while streaming).
+pub(crate) async fn read_capped(
+    reply: reqwest::Response,
+    cap: usize,
+    what: &'static str,
+) -> Result<Vec<u8>> {
+    let mut reply = reply.error_for_status()?;
+    if reply.content_length().is_some_and(|n| n > cap as u64) {
+        return Err(Error::TooLarge(what));
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = reply.chunk().await? {
+        if out.len() + chunk.len() > cap {
+            return Err(Error::TooLarge(what));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 /// Gunzips `data`, refusing to produce more than `cap` bytes (decompression bombs).

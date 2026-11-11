@@ -5,6 +5,12 @@ edition.workspace = true
 description = "Native Steam client: CM over WebSocket, PICS, content delivery."
 
 [dependencies]
+aes = "0.8"
+base64 = "0.22"
+lzma-rs = "0.3"
+ruzstd = "0.8"
+sha1 = "0.10"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 prost = "0.14"
@@ -12,7 +18,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls-no-p
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "fs", "io-util"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 
 [build-dependencies]

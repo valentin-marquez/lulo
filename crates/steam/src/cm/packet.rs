@@ -18,6 +18,7 @@ const MULTI_DEPTH: usize = 2;
 /// Message ids we use (`enums_clientserver.proto`).
 pub mod emsg {
     pub const MULTI: u32 = 1;
+    pub const DEST_JOB_FAILED: u32 = 113;
     pub const SERVICE_METHOD_RESPONSE: u32 = 147;
     pub const SERVICE_METHOD_CALL: u32 = 151;
     pub const CLIENT_LOGON_RESPONSE: u32 = 751;
@@ -28,6 +29,7 @@ pub mod emsg {
     pub const CLIENT_PICS_PRODUCT_INFO_RESPONSE: u32 = 8904;
     pub const CLIENT_PICS_ACCESS_TOKEN_REQUEST: u32 = 8905;
     pub const CLIENT_PICS_ACCESS_TOKEN_RESPONSE: u32 = 8906;
+    pub const SERVICE_METHOD_CALL_NON_AUTHED: u32 = 9804;
     pub const CLIENT_HELLO: u32 = 9805;
 }
 
@@ -56,7 +58,7 @@ fn u32_at(bytes: &[u8], at: usize) -> Result<u32> {
 pub fn decode(bytes: &[u8]) -> Result<Packet> {
     let raw = u32_at(bytes, 0)?;
     if raw & PROTO_MASK == 0 {
-        return Err(Error::Packet("not a protobuf packet"));
+        return Ok(legacy(raw, bytes));
     }
     let len = u32_at(bytes, 4)? as usize;
     let header = bytes
@@ -67,6 +69,27 @@ pub fn decode(bytes: &[u8]) -> Result<Packet> {
         header: CMsgProtoBufHeader::decode(header)?,
         body: bytes[8 + len..].to_vec(),
     })
+}
+
+/// A packet in the old non-protobuf framing. We only read the target job of `DestJobFailed`, so a
+/// request whose job died fails instead of waiting forever; other legacy packets are kept empty.
+fn legacy(emsg: u32, bytes: &[u8]) -> Packet {
+    // ExtendedClientMsgHdr: emsg u32 | header size u8 | version u16 | target job u64 | ...
+    let target = bytes
+        .get(7..15)
+        .map(|b| u64::from_le_bytes(b.try_into().expect("8 bytes")));
+    Packet {
+        emsg,
+        header: CMsgProtoBufHeader {
+            jobid_target: if emsg == emsg::DEST_JOB_FAILED {
+                target
+            } else {
+                None
+            },
+            ..Default::default()
+        },
+        body: Vec::new(),
+    }
 }
 
 /// Flattens `Multi` packets (recursively) into the packets they carry.
@@ -143,8 +166,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_protobuf_and_truncated() {
-        assert!(decode(&[1, 0, 0, 0, 0, 0, 0, 0]).is_err());
+    fn reads_dest_job_failed_and_rejects_truncated() {
+        // Legacy header: emsg 113, size 36, version 2, target job 7, ...
+        let mut legacy = 113u32.to_le_bytes().to_vec();
+        legacy.push(36);
+        legacy.extend_from_slice(&2u16.to_le_bytes());
+        legacy.extend_from_slice(&7u64.to_le_bytes());
+        let packet = decode(&legacy).unwrap();
+        assert_eq!(
+            (packet.emsg, packet.header.jobid_target),
+            (emsg::DEST_JOB_FAILED, Some(7))
+        );
+
         assert!(decode(&[1, 0]).is_err());
         let mut bad = hello(1);
         bad[4] = 0xff; // header length past the end

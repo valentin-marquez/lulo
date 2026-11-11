@@ -61,3 +61,39 @@ async fn downloads_a_workshop_mod_like_steamcmd() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// QR login can be started anonymously; Steam answers with a challenge URL and a pending poll.
+#[tokio::test]
+#[ignore = "needs network access to Steam"]
+async fn starts_a_qr_login() {
+    let http = steam::http();
+    let mut client = steam::Client::connect(&http).await.expect("connect");
+    let mut session = steam::auth::qr(&mut client).await.expect("begin QR login");
+    let url = session.challenge_url.clone().unwrap_or_default();
+    assert!(url.starts_with("https://s.team/q/"), "{url}");
+    assert!(matches!(
+        steam::auth::poll(&mut client, &mut session)
+            .await
+            .expect("poll"),
+        steam::auth::Poll::Pending | steam::auth::Poll::Rotated(_)
+    ));
+}
+
+/// A made-up account still gets an RSA key, and a wrong password is refused with EResult 5.
+#[tokio::test]
+#[ignore = "needs network access to Steam"]
+async fn refuses_a_made_up_password_login() {
+    let http = steam::http();
+    let mut client = steam::Client::connect(&http).await.expect("connect");
+    let result = steam::auth::password(
+        &mut client,
+        "lulo-made-up-account-0001",
+        "not-the-password",
+        None,
+    )
+    .await;
+    assert!(
+        matches!(result, Err(steam::Error::Steam { code: 5, .. })),
+        "{result:?}"
+    );
+}

@@ -2,6 +2,7 @@
 //!
 //! Protocol notes and the reference implementation live outside the repo (see CLAUDE.md).
 
+pub mod auth;
 pub mod cm;
 pub mod content;
 pub mod directory;

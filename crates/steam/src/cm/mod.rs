@@ -24,6 +24,9 @@ const ANONYMOUS: u64 = (1 << 56) | (10 << 52);
 /// How many CM endpoints to try before giving up.
 const ATTEMPTS: usize = 3;
 const OK: i32 = 1;
+/// How this machine shows up in the user's Steam authorized devices.
+pub(crate) const DEVICE_NAME: &str = "lulo";
+pub(crate) const OS: i32 = OS_TYPE as i32;
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -41,9 +44,60 @@ pub struct Client {
 }
 
 impl Client {
+    /// The logged-on account (or 0 before logon).
+    pub fn steamid(&self) -> u64 {
+        self.steamid
+    }
+}
+
+impl Client {
     /// Connects to a CM from the public directory and logs on anonymously.
     pub async fn anonymous(http: &reqwest::Client) -> Result<Self> {
         let mut client = Self::connect(http).await?;
+        client.steamid = ANONYMOUS;
+        client
+            .logon(CMsgClientLogon::default(), "anonymous logon")
+            .await?;
+        Ok(client)
+    }
+
+    /// Logs on as a user with a refresh token from [`crate::auth`]. `steamid` is the account's.
+    pub async fn user(&mut self, account: &str, refresh_token: &str, steamid: u64) -> Result<()> {
+        self.steamid = steamid;
+        let logon = CMsgClientLogon {
+            account_name: Some(account.to_owned()),
+            // The field is named access_token, but Steam expects the refresh token here.
+            access_token: Some(refresh_token.to_owned()),
+            should_remember_password: Some(true),
+            machine_name: Some(DEVICE_NAME.to_owned()),
+            supports_rate_limit_response: Some(true),
+            ..Default::default()
+        };
+        self.logon(logon, "user logon").await
+    }
+
+    async fn logon(&mut self, base: CMsgClientLogon, context: &str) -> Result<()> {
+        let logon = CMsgClientLogon {
+            protocol_version: Some(PROTOCOL_VERSION),
+            client_os_type: Some(OS_TYPE),
+            cell_id: Some(0),
+            ..base
+        };
+        self.send(emsg::CLIENT_LOGON, &logon, CMsgProtoBufHeader::default())
+            .await?;
+        let reply = self.recv(emsg::CLIENT_LOGON_RESPONSE, None).await?;
+        let response = CMsgClientLogonResponse::decode(reply.body.as_slice())?;
+        check(response.eresult, context)?;
+        self.steamid = reply.header.steamid.unwrap_or(self.steamid);
+        self.session = reply.header.client_sessionid.unwrap_or(0);
+        self.cell_id = response.cell_id.unwrap_or(0);
+        Ok(())
+    }
+
+    /// Connects to a CM from the public directory and says hello, without logging on: the
+    /// state [`crate::auth`] needs (steamid 0).
+    pub async fn connect(http: &reqwest::Client) -> Result<Self> {
+        let mut client = Self::open(http).await?;
         client
             .send(
                 emsg::CLIENT_HELLO,
@@ -53,26 +107,10 @@ impl Client {
                 CMsgProtoBufHeader::default(),
             )
             .await?;
-        let logon = CMsgClientLogon {
-            protocol_version: Some(PROTOCOL_VERSION),
-            client_os_type: Some(OS_TYPE),
-            cell_id: Some(0),
-            ..Default::default()
-        };
-        client
-            .send(emsg::CLIENT_LOGON, &logon, CMsgProtoBufHeader::default())
-            .await?;
-
-        let reply = client.recv(emsg::CLIENT_LOGON_RESPONSE, None).await?;
-        let response = CMsgClientLogonResponse::decode(reply.body.as_slice())?;
-        check(response.eresult, "anonymous logon")?;
-        client.steamid = reply.header.steamid.unwrap_or(ANONYMOUS);
-        client.session = reply.header.client_sessionid.unwrap_or(0);
-        client.cell_id = response.cell_id.unwrap_or(0);
         Ok(client)
     }
 
-    async fn connect(http: &reqwest::Client) -> Result<Self> {
+    async fn open(http: &reqwest::Client) -> Result<Self> {
         crate::tls();
         let mut last = Error::NoServers;
         for endpoint in directory::websocket_endpoints(http)
@@ -84,7 +122,7 @@ impl Client {
                 Ok((socket, _)) => {
                     return Ok(Self {
                         socket,
-                        steamid: ANONYMOUS,
+                        steamid: 0,
                         session: 0,
                         job: 0,
                         queue: VecDeque::new(),
@@ -114,7 +152,14 @@ impl Client {
     async fn recv(&mut self, emsg: u32, job: Option<u64>) -> Result<Packet> {
         loop {
             while let Some(packet) = self.queue.pop_front() {
-                if packet.emsg == emsg && (job.is_none() || packet.header.jobid_target == job) {
+                let for_job = job.is_none() || packet.header.jobid_target == job;
+                if packet.emsg == emsg::DEST_JOB_FAILED && job.is_some() && for_job {
+                    return Err(Error::Steam {
+                        code: 2, // EResult::Fail
+                        context: "request (job failed on Steam's side)".into(),
+                    });
+                }
+                if packet.emsg == emsg && for_job {
                     return Ok(packet);
                 }
             }
@@ -137,14 +182,33 @@ impl Client {
         method: &str,
         request: &impl Message,
     ) -> Result<Resp> {
+        self.service(emsg::SERVICE_METHOD_CALL, method, request)
+            .await
+    }
+
+    /// Calls a service method that works before logon (the `Authentication` service).
+    pub async fn call_unauthed<Resp: Message + Default>(
+        &mut self,
+        method: &str,
+        request: &impl Message,
+    ) -> Result<Resp> {
+        self.service(emsg::SERVICE_METHOD_CALL_NON_AUTHED, method, request)
+            .await
+    }
+
+    async fn service<Resp: Message + Default>(
+        &mut self,
+        emsg: u32,
+        method: &str,
+        request: &impl Message,
+    ) -> Result<Resp> {
         let job = self.next_job();
         let header = CMsgProtoBufHeader {
             target_job_name: Some(format!("{method}#1")),
             jobid_source: Some(job),
             ..Default::default()
         };
-        self.send(emsg::SERVICE_METHOD_CALL, request, header)
-            .await?;
+        self.send(emsg, request, header).await?;
         let reply = self.recv(emsg::SERVICE_METHOD_RESPONSE, Some(job)).await?;
         check(reply.header.eresult, method)?;
         Ok(Resp::decode(reply.body.as_slice())?)

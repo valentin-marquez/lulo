@@ -1,0 +1,16 @@
+// Extraído de steamclient.so
+syntax = "proto2";
+import "google/protobuf/descriptor.proto";
+
+enum EProtoExecutionSite {
+  k_EProtoExecutionSiteUnknown = 0;
+  k_EProtoExecutionSiteSteamClient = 2;
+}
+
+enum EProtoServiceType {
+  k_EProtoServiceTypeSteamMessages = 0;
+  k_EProtoServiceTypeVRGamepadUIMessages = 1;
+}
+
+message NoResponse {
+}

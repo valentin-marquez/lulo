@@ -1,1 +1,5 @@
 /target
+
+# Script output: downloads, logs and cached depot keys (never commit)
+/research/steam/runs/
+__pycache__/

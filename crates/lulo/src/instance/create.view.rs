@@ -10,8 +10,9 @@ use gpui_kit::*;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use super::{Branch, Instance, branches, store};
-use crate::ui::FancyButton;
+use super::branches::{self, Branch};
+use super::{Instance, store};
+use crate::ui::{FancyButton, Loader};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
@@ -50,7 +51,11 @@ pub fn open(
     cx: &mut App,
 ) {
     let created: Created = Rc::new(created);
-    let view = cx.new(|cx| Create::new(root, created, window, cx));
+    let view = cx.new(|cx| {
+        let mut create = Create::new(root, created, window, cx);
+        create.load(cx);
+        create
+    });
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
             .title("Create instance")
@@ -63,7 +68,8 @@ struct Create {
     root: PathBuf,
     created: Created,
     source: Source,
-    branches: Vec<Branch>,
+    /// `None` while loading from Steam.
+    branches: Option<Result<Vec<Branch>, String>>,
     branch: usize,
     name: Entity<InputState>,
     link: Entity<InputState>,
@@ -76,7 +82,7 @@ impl Create {
             root,
             created,
             source: Source::Custom,
-            branches: branches(),
+            branches: None,
             branch: 0,
             name: cx.new(|cx| InputState::new(window, cx).placeholder("New instance")),
             link: cx.new(|cx| {
@@ -148,7 +154,44 @@ impl Create {
             .child(cell(px(96.)).child("Build"))
             .child(cell(px(96.)).child("Updated"));
 
-        let rows = self.branches.iter().enumerate().map(|(ix, branch)| {
+        let list = match &self.branches {
+            None => {
+                return div().flex().flex_col().child(header).child(Loader).child(
+                    div()
+                        .px_3()
+                        .py_3()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("Loading versions from Steam"),
+                );
+            }
+            Some(Err(err)) => {
+                return div().flex().flex_col().child(header).child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py_3()
+                        .text_sm()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("Couldn't reach Steam: {err}")),
+                        )
+                        .child(
+                            Button::new("retry")
+                                .outline()
+                                .cursor_pointer()
+                                .label("Retry")
+                                .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
+                        ),
+                );
+            }
+            Some(Ok(list)) => list,
+        };
+        let rows = list.iter().enumerate().map(|(ix, branch)| {
             let selected = ix == self.branch;
             div()
                 .id(ix)
@@ -184,24 +227,28 @@ impl Create {
                                 })
                                 .when(selected, |this| this.border(px(4.))),
                         )
-                        .child(branch.name),
+                        .child(branch.name.clone()),
                 )
                 .child(
                     div()
                         .flex_1()
                         .truncate()
                         .text_color(theme.muted_foreground)
-                        .child(branch.description),
+                        .child(match (&branch.description, branch.name.as_str()) {
+                            (Some(text), _) => text.clone(),
+                            (None, "public") => "Current release".into(),
+                            (None, _) => String::new(),
+                        }),
                 )
                 .child(
                     cell(px(96.))
                         .text_color(theme.muted_foreground)
-                        .child(branch.build),
+                        .child(branch.build_id.to_string()),
                 )
                 .child(
                     cell(px(96.))
                         .text_color(theme.muted_foreground)
-                        .child(branch.updated),
+                        .child(branch.updated.map(branches::date).unwrap_or_default()),
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.branch = ix;
@@ -212,6 +259,20 @@ impl Create {
         div().flex().flex_col().child(header).children(rows)
     }
 
+    fn load(&mut self, cx: &mut Context<Self>) {
+        self.branches = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = branches::fetch().await;
+            let _ = this.update(cx, |this, cx| {
+                this.branch = 0;
+                this.branches = Some(result);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.name.read(cx).value().trim().to_owned();
         let name = if typed.is_empty() {
@@ -219,8 +280,11 @@ impl Create {
         } else {
             typed
         };
-        let branch = self.branches[self.branch].name;
-        match store::create(&self.root, &name, branch) {
+        let Some(Ok(list)) = &self.branches else {
+            return;
+        };
+        let branch = list[self.branch].name.clone();
+        match store::create(&self.root, &name, &branch) {
             Ok(instance) => {
                 window.close_dialog(cx);
                 (self.created)(instance, window, cx);
@@ -352,16 +416,19 @@ impl Render for Create {
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     // ponytail: only Custom creates for now; collections and imports come later.
-                    .when(self.source == Source::Custom, |this| {
-                        this.child(
-                            FancyButton::new("create", "Create instance")
-                                .small()
-                                .icon(IconName::Plus)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.create(window, cx)),
-                                ),
-                        )
-                    }),
+                    .when(
+                        self.source == Source::Custom && matches!(self.branches, Some(Ok(_))),
+                        |this| {
+                            this.child(
+                                FancyButton::new("create", "Create instance")
+                                    .small()
+                                    .icon(IconName::Plus)
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.create(window, cx)),
+                                    ),
+                            )
+                        },
+                    ),
             )
     }
 }

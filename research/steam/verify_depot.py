@@ -78,10 +78,19 @@ def files(manifest_zip, key, host, depot):
         yield name, bytes(data), f'{m.size} B, {len(m.chunks)} chunk, {kind}'
 
 
+def safe_join(outdir, name):
+    """Refuses manifest paths that would land outside outdir (absolute, drive letters, '..')."""
+    root = os.path.realpath(outdir)
+    real = os.path.realpath(os.path.join(root, name))
+    if os.path.isabs(name) or ':' in name or os.path.commonpath([real, root]) != root:
+        raise SystemExit(f'ruta insegura en el manifest: {name!r}')
+    return real
+
+
 def download(manifest_zip, key, host, depot, outdir):
     n = 0
     for name, data, info in files(manifest_zip, key, host, depot):
-        p = os.path.join(outdir, name)
+        p = safe_join(outdir, name)
         if data is None: os.makedirs(p, exist_ok=True); continue
         os.makedirs(os.path.dirname(p), exist_ok=True); open(p, 'wb').write(data); n += 1
         print(f'  escrito {name} ({info})')
@@ -92,7 +101,7 @@ def main(manifest_zip, key_hex, host, depot, installed):
     ok = bad = 0
     for name, data, info in files(manifest_zip, bytes.fromhex(key_hex), host, depot):
         if data is None: continue
-        same = open(os.path.join(installed, name), 'rb').read() == data; ok += same; bad += not same
+        same = open(safe_join(installed, name), 'rb').read() == data; ok += same; bad += not same
         print(f'  {"OK " if same else "DIF"} {name} ({info})')
     print(f'resultado: {ok} idénticos a SteamCMD, {bad} distintos')
 

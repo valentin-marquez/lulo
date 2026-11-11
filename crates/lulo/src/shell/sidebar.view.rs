@@ -126,28 +126,37 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
             row("new", false, cx)
                 .child(tile(IconName::Plus, cx))
                 .child(label("New instance"))
-                .on_click(move |_, window, cx| Shell::create(handle.clone(), window, cx)),
+                .on_click({
+                    let handle = handle.clone();
+                    move |_, window, cx| Shell::create(handle.clone(), window, cx)
+                }),
         )
         .child(
             row("settings", false, cx)
                 .child(tile(IconName::Settings, cx))
                 .child(div().text_sm().child("Settings")),
         )
-        // ponytail: placeholder until Steam login (roadmap step 4).
-        .child(
+        .child({
+            let account = handle.clone();
+            let (name, detail) = match shell.account() {
+                Some(signed_in) => (signed_in.name.clone(), "Steam"),
+                None => ("Not signed in".to_owned(), "Sign in to Steam"),
+            };
             row("account", false, cx)
                 .child(tile(IconName::CircleUser, cx))
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .child(div().text_sm().child("Not signed in"))
+                        .min_w_0()
+                        .child(div().text_sm().truncate().child(name))
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
-                                .child("Steam"),
+                                .child(detail),
                         ),
-                ),
-        )
+                )
+                .on_click(move |_, window, cx| Shell::open_account(account.clone(), window, cx))
+        })
 }

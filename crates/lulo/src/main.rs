@@ -1,6 +1,8 @@
+mod account;
 mod assets;
 mod home;
 mod instance;
+mod runtime;
 mod screenshots;
 mod shell;
 mod theme;

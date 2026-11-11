@@ -11,6 +11,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::account::{self, Account};
 use crate::instance::{self, Instance, detail::Detail, store};
 use crate::ui::Loader;
 use crate::{home, screenshots};
@@ -28,15 +29,25 @@ pub struct Shell {
     instances: Vec<Instance>,
     page: Page,
     detail: Option<Entity<Detail>>,
+    account: Option<Account>,
     /// Shows the loader under the title bar while the page's data loads.
     // ponytail: listing instances is instant; installs (roadmap 5) will set it.
     loading: bool,
 }
 
 impl Shell {
-    pub fn new(_: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         let root = store::root();
+        cx.spawn(async move |this, cx| {
+            let saved = account::load().await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.account = saved;
+                cx.notify();
+            });
+        })
+        .detach();
         Self {
+            account: None,
             instances: store::list(&root),
             root,
             page: Page::Home,
@@ -61,6 +72,57 @@ impl Shell {
         }
         self.page = page;
         cx.notify();
+    }
+
+    pub fn account(&self) -> Option<&Account> {
+        self.account.as_ref()
+    }
+
+    /// Signed out: the sign-in dialog. Signed in: who it is, and a way to sign out.
+    pub fn open_account(shell: WeakEntity<Shell>, window: &mut Window, cx: &mut App) {
+        let Ok(current) = shell.read_with(cx, |shell, _| shell.account.clone()) else {
+            return;
+        };
+        match current {
+            None => account::login::open(
+                move |signed_in, _, cx| {
+                    let _ = shell.update(cx, |shell, cx| {
+                        shell.account = Some(signed_in);
+                        cx.notify();
+                    });
+                },
+                window,
+                cx,
+            ),
+            Some(current) => {
+                use gpui_kit::component::WindowExt;
+                window.open_dialog(cx, move |dialog, _, _| {
+                    let shell = shell.clone();
+                    dialog
+                        .title("Steam account")
+                        .w(px(380.))
+                        .child(format!("Signed in as {}.", current.name))
+                        .child(
+                            div().flex().justify_end().pt_4().child(
+                                crate::ui::FancyButton::new("sign-out", "Sign out")
+                                    .small()
+                                    .on_click(move |_, window, cx| {
+                                        window.close_dialog(cx);
+                                        let shell = shell.clone();
+                                        cx.spawn(async move |cx| {
+                                            let _ = account::forget().await;
+                                            let _ = shell.update(cx, |shell, cx| {
+                                                shell.account = None;
+                                                cx.notify();
+                                            });
+                                        })
+                                        .detach();
+                                    }),
+                            ),
+                        )
+                });
+            }
+        }
     }
 
     /// Opens the create dialog; a created instance is listed and selected.

@@ -1,21 +1,10 @@
 //! Project Zomboid's Steam branches (the game versions an instance can pin), fetched live.
 //!
-//! The steam crate runs on tokio; GPUI has its own executor, so requests run on a small runtime
-//! of ours and the UI awaits the join handle.
-
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 
 pub use steam::pics::Branch;
 
 const PROJECT_ZOMBOID: u32 = 108600;
-
-static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .expect("start the network runtime")
-});
 
 /// Branches change a few times a month; one fetch per session is enough.
 static CACHE: Mutex<Option<Vec<Branch>>> = Mutex::new(None);
@@ -25,16 +14,15 @@ pub async fn fetch() -> Result<Vec<Branch>, String> {
     if let Some(cached) = CACHE.lock().expect("cache lock").clone() {
         return Ok(cached);
     }
-    let branches = RUNTIME
-        .spawn(async {
-            let http = steam::http();
-            let mut client = steam::Client::anonymous(&http).await?;
-            let info = steam::pics::app_info(&mut client, &http, PROJECT_ZOMBOID).await?;
-            Ok::<_, steam::Error>(steam::pics::branches(&info))
-        })
-        .await
-        .map_err(|err| err.to_string())?
-        .map_err(|err| err.to_string())?;
+    let branches = crate::runtime::spawn(async {
+        let http = steam::http();
+        let mut client = steam::Client::anonymous(&http).await?;
+        let info = steam::pics::app_info(&mut client, &http, PROJECT_ZOMBOID).await?;
+        Ok::<_, steam::Error>(steam::pics::branches(&info))
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())?;
     let usable: Vec<_> = branches
         .into_iter()
         .filter(|b| !b.password_required)

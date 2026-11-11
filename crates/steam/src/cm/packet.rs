@@ -3,15 +3,14 @@
 //! `u32 LE (emsg | PROTO_MASK) | u32 LE header length | CMsgProtoBufHeader | body`.
 //! `Multi` packets bundle several packets, optionally gzipped, as `[u32 len][packet]...`.
 
-use std::io::Read;
-
-use flate2::read::GzDecoder;
 use prost::Message;
 
 use crate::proto::{CMsgMulti, CMsgProtoBufHeader};
 use crate::{Error, Result};
 
 const PROTO_MASK: u32 = 0x8000_0000;
+/// CM bundles are small (KB to a few MB); anything past this is refused.
+const MULTI_CAP: u64 = 32 << 20;
 
 /// Message ids we use (`enums_clientserver.proto`).
 pub mod emsg {
@@ -75,9 +74,7 @@ pub fn expand(packet: Packet) -> Result<Vec<Packet>> {
     let multi = CMsgMulti::decode(packet.body.as_slice())?;
     let body = multi.message_body.unwrap_or_default();
     let data = if multi.size_unzipped.unwrap_or(0) > 0 {
-        let mut out = Vec::new();
-        GzDecoder::new(body.as_slice()).read_to_end(&mut out)?;
-        out
+        crate::gunzip(&body, MULTI_CAP, "Multi packet")?
     } else {
         body
     };

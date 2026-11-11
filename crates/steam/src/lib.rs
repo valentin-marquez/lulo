@@ -34,6 +34,8 @@ pub enum Error {
     Closed,
     #[error("no reachable CM server")]
     NoServers,
+    #[error("{0} is larger than allowed")]
+    TooLarge(&'static str),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -49,4 +51,34 @@ pub fn http() -> reqwest::Client {
 fn tls() {
     // Err only means it was already installed.
     let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+/// Gunzips `data`, refusing to produce more than `cap` bytes (decompression bombs).
+pub(crate) fn gunzip(data: &[u8], cap: u64, what: &'static str) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .take(cap + 1)
+        .read_to_end(&mut out)?;
+    if out.len() as u64 > cap {
+        return Err(Error::TooLarge(what));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    #[test]
+    fn gunzip_enforces_cap() {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&[0u8; 4096]).unwrap();
+        let data = gz.finish().unwrap();
+        assert_eq!(super::gunzip(&data, 4096, "test").unwrap().len(), 4096);
+        assert!(matches!(
+            super::gunzip(&data, 4095, "test"),
+            Err(super::Error::TooLarge(_))
+        ));
+    }
 }

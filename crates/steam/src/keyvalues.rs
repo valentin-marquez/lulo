@@ -43,7 +43,12 @@ pub enum ParseError {
     Eof,
     #[error("unexpected '{0}'")]
     Unexpected(char),
+    #[error("nested deeper than {MAX_DEPTH} levels")]
+    TooDeep,
 }
+
+/// Real appinfo nests ~6 levels; the cap keeps hostile input from overflowing the stack.
+const MAX_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq)]
 enum Token {
@@ -91,11 +96,15 @@ fn tokens(text: &str) -> Result<Vec<Token>, ParseError> {
 pub fn parse(text: &str) -> Result<Map, ParseError> {
     let tokens = tokens(text)?;
     let mut at = 0;
-    let map = block(&tokens, &mut at, false)?;
+    let map = block(&tokens, &mut at, 0)?;
     Ok(map)
 }
 
-fn block(tokens: &[Token], at: &mut usize, nested: bool) -> Result<Map, ParseError> {
+fn block(tokens: &[Token], at: &mut usize, depth: usize) -> Result<Map, ParseError> {
+    if depth > MAX_DEPTH {
+        return Err(ParseError::TooDeep);
+    }
+    let nested = depth > 0;
     let mut entries = Vec::new();
     loop {
         let key = match tokens.get(*at) {
@@ -117,7 +126,7 @@ fn block(tokens: &[Token], at: &mut usize, nested: bool) -> Result<Map, ParseErr
             }
             Token::Open => {
                 *at += 1;
-                Value::Map(block(tokens, at, true)?)
+                Value::Map(block(tokens, at, depth + 1)?)
             }
             Token::Close => return Err(ParseError::Unexpected('}')),
         };
@@ -162,5 +171,11 @@ mod tests {
         assert_eq!(parse(r#""a" { "b" "c""#), Err(ParseError::Eof));
         assert_eq!(parse(r#""a" }"#), Err(ParseError::Unexpected('}')));
         assert_eq!(parse("a"), Err(ParseError::Unexpected('a')));
+        let deep = format!(
+            "{}{}",
+            "\"k\" {".repeat(MAX_DEPTH + 2),
+            "}".repeat(MAX_DEPTH + 2)
+        );
+        assert_eq!(parse(&deep), Err(ParseError::TooDeep));
     }
 }

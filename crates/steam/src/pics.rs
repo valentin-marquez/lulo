@@ -1,9 +1,5 @@
 //! PICS (product info): an app's KeyValues, and the game branches inside it.
 
-use std::io::Read;
-
-use flate2::read::GzDecoder;
-
 use crate::cm::packet::emsg;
 use crate::keyvalues::{self, Map};
 use crate::proto::{
@@ -12,6 +8,10 @@ use crate::proto::{
     c_msg_client_pics_product_info_request::AppInfo as AppRequest,
 };
 use crate::{Client, Error, Result};
+
+/// appinfo is KBs; these caps only stop a broken or hostile server.
+const COMPRESSED_CAP: usize = 8 << 20;
+const TEXT_CAP: u64 = 32 << 20;
 
 /// Fetches the `appinfo` KeyValues of `appid`. Large entries come over HTTP instead of inline.
 pub async fn app_info(client: &mut Client, http: &reqwest::Client, appid: u32) -> Result<Map> {
@@ -56,22 +56,20 @@ pub async fn app_info(client: &mut Client, http: &reqwest::Client, appid: u32) -
     let text = match &app.buffer {
         Some(buffer) if !buffer.is_empty() => buffer.clone(),
         _ => {
-            // Path format from steamclient.so: /appinfo/%u/sha/%s.txt.gz
+            // Path format from steamclient.so: /appinfo/%u/sha/%s.txt.gz, fetched over http there.
+            // Try https first; `sha` is not a hash of the text, so it can't verify the body.
+            // ponytail: untested path (PZ's appinfo currently arrives inline).
             let sha: String = app.sha().iter().map(|b| format!("{b:02x}")).collect();
-            let url = format!(
-                "http://{}/appinfo/{appid}/sha/{sha}.txt.gz",
-                response.http_host()
-            );
-            let gz = http
-                .get(url)
-                .send()
-                .await?
-                .error_for_status()?
-                .bytes()
-                .await?;
-            let mut out = Vec::new();
-            GzDecoder::new(gz.as_ref()).read_to_end(&mut out)?;
-            out
+            let path = format!("{}/appinfo/{appid}/sha/{sha}.txt.gz", response.http_host());
+            let reply = match http.get(format!("https://{path}")).send().await {
+                Ok(reply) => reply,
+                Err(_) => http.get(format!("http://{path}")).send().await?,
+            };
+            let gz = reply.error_for_status()?.bytes().await?;
+            if gz.len() > COMPRESSED_CAP {
+                return Err(Error::TooLarge("appinfo download"));
+            }
+            crate::gunzip(&gz, TEXT_CAP, "appinfo")?
         }
     };
 

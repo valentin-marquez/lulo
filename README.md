@@ -1,4 +1,4 @@
-# lulo
+![lulo](assets/banner.png)
 
 Instance launcher for Project Zomboid, rewritten from scratch in Rust.
 

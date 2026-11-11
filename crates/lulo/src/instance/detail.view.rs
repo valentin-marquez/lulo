@@ -70,10 +70,7 @@ impl Detail {
     fn header(&self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let instance = &self.instance;
-        let played = match &instance.last_played {
-            Some(when) => format!("Played {when}"),
-            None => "Never played".into(),
-        };
+        let played = instance.played();
 
         div()
             .flex()

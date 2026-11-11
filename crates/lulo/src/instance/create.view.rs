@@ -7,7 +7,10 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{Branch, branches};
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use super::{Branch, Instance, branches, store};
 use crate::ui::FancyButton;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -37,8 +40,17 @@ impl Source {
     }
 }
 
-pub fn open(window: &mut Window, cx: &mut App) {
-    let view = cx.new(|cx| Create::new(window, cx));
+type Created = Rc<dyn Fn(Instance, &mut Window, &mut App)>;
+
+/// Opens the dialog. `created` runs after a new instance is written under `root`.
+pub fn open(
+    root: PathBuf,
+    created: impl Fn(Instance, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let created: Created = Rc::new(created);
+    let view = cx.new(|cx| Create::new(root, created, window, cx));
     window.open_dialog(cx, move |dialog, _, _| {
         dialog
             .title("Create instance")
@@ -48,6 +60,8 @@ pub fn open(window: &mut Window, cx: &mut App) {
 }
 
 struct Create {
+    root: PathBuf,
+    created: Created,
     source: Source,
     branches: Vec<Branch>,
     branch: usize,
@@ -57,8 +71,10 @@ struct Create {
 }
 
 impl Create {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(root: PathBuf, created: Created, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
+            root,
+            created,
             source: Source::Custom,
             branches: branches(),
             branch: 0,
@@ -196,6 +212,25 @@ impl Create {
         div().flex().flex_col().child(header).children(rows)
     }
 
+    fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.name.read(cx).value().trim().to_owned();
+        let name = if typed.is_empty() {
+            "New instance".to_owned()
+        } else {
+            typed
+        };
+        let branch = self.branches[self.branch].name;
+        match store::create(&self.root, &name, branch) {
+            Ok(instance) => {
+                window.close_dialog(cx);
+                (self.created)(instance, window, cx);
+            }
+            Err(err) => {
+                window.push_notification(format!("Couldn't create the instance: {err}"), cx)
+            }
+        }
+    }
+
     fn field(label: &'static str, input: &Entity<InputState>, hint: &'static str, cx: &App) -> Div {
         div()
             .flex()
@@ -316,13 +351,17 @@ impl Render for Create {
                             .rounded(px(8.))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
-                    // ponytail: closes without creating anything until instances persist to disk.
-                    .child(
-                        FancyButton::new("create", "Create instance")
-                            .small()
-                            .icon(IconName::Plus)
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    ),
+                    // ponytail: only Custom creates for now; collections and imports come later.
+                    .when(self.source == Source::Custom, |this| {
+                        this.child(
+                            FancyButton::new("create", "Create instance")
+                                .small()
+                                .icon(IconName::Plus)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.create(window, cx)),
+                                ),
+                        )
+                    }),
             )
     }
 }

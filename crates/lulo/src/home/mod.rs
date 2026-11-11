@@ -3,23 +3,21 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Icon};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::instance::{self, Instance, Status};
+use crate::instance::{Instance, Status};
 use crate::shell::{Page, Shell};
-use crate::ui::{FancyButton, Meta};
+use crate::ui::{Empty, FancyButton, Meta};
 
 fn row(ix: usize, instance: &Instance, cx: &mut Context<Shell>) -> Stateful<Div> {
     let theme = cx.theme();
-    let played = match &instance.last_played {
-        Some(when) => format!("Played {when}"),
-        None => "Never played".into(),
-    };
-    let status = match instance.status {
+    let played = instance.played();
+    let status = match instance.status() {
         Status::Ready => None,
-        Status::Outdated => Some(("Update available".to_string(), theme.primary)),
-        Status::Downloading(pct) => Some((format!("Downloading {pct}%"), theme.muted_foreground)),
+        Status::NotInstalled => Some(Status::NotInstalled.label()),
     };
+    let dir = instance.dir.clone();
 
     div()
         .id(instance.id.clone())
@@ -67,13 +65,22 @@ fn row(ix: usize, instance: &Instance, cx: &mut Context<Shell>) -> Stateful<Div>
                         .child(Meta::new(IconName::Clock, played)),
                 ),
         )
-        .children(status.map(|(text, color)| div().text_sm().text_color(color).child(text)))
+        .children(status.map(|text| {
+            div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(text)
+        }))
         .child(
             Button::new(SharedString::from(format!("folder-{}", instance.id)))
                 .ghost()
                 .icon(IconName::FolderOpen)
                 .tooltip("Open folder")
-                .cursor_pointer(),
+                .cursor_pointer()
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    cx.open_with_system(&dir);
+                }),
         )
         .child(
             FancyButton::new(SharedString::from(format!("play-{}", instance.id)), "Play")
@@ -84,6 +91,7 @@ fn row(ix: usize, instance: &Instance, cx: &mut Context<Shell>) -> Stateful<Div>
 }
 
 pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
+    let handle = cx.entity().downgrade();
     let mut rows = Vec::new();
     for (ix, instance) in shell.instances().iter().enumerate() {
         rows.push(row(ix, instance, cx));
@@ -111,18 +119,27 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     FancyButton::new("home-new", "New instance")
                         .small()
                         .icon(IconName::Plus)
-                        .on_click(|_, window, cx| instance::create::open(window, cx)),
+                        .on_click(move |_, window, cx| Shell::create(handle.clone(), window, cx)),
                 ),
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .rounded(theme.radius_lg)
-                .bg(theme.group_box)
-                .border_1()
-                .border_color(theme.border)
-                .overflow_hidden()
-                .children(rows),
-        )
+        .when(rows.is_empty(), |this| {
+            this.child(Empty::new(
+                IconName::Box,
+                "No instances yet",
+                "Create one to pick a game version and start playing.",
+            ))
+        })
+        .when(!rows.is_empty(), |this| {
+            this.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .rounded(theme.radius_lg)
+                    .bg(theme.group_box)
+                    .border_1()
+                    .border_color(theme.border)
+                    .overflow_hidden()
+                    .children(rows),
+            )
+        })
 }

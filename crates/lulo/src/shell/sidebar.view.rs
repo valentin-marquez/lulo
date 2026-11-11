@@ -6,7 +6,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Page, Shell};
-use crate::instance::{self, Status};
+use crate::instance::Status;
 
 const WIDTH: Pixels = px(248.);
 
@@ -56,13 +56,11 @@ fn label(text: impl Into<SharedString>) -> Div {
 }
 
 fn status(status: Status, cx: &App) -> Div {
-    let theme = cx.theme();
-    let (text, color) = match status {
-        Status::Ready => ("Ready".to_string(), theme.muted_foreground),
-        Status::Outdated => ("Update available".into(), theme.primary),
-        Status::Downloading(pct) => (format!("Downloading {pct}%"), theme.muted_foreground),
-    };
-    div().text_xs().text_color(color).truncate().child(text)
+    div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .truncate()
+        .child(status.label())
 }
 
 fn nav(
@@ -79,6 +77,7 @@ fn nav(
 }
 
 pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
+    let handle = cx.entity().downgrade();
     let home = nav(Page::Home, IconName::House, "Home", shell, cx);
     let screenshots = nav(Page::Screenshots, IconName::Image, "Screenshots", shell, cx);
     let theme = cx.theme();
@@ -92,7 +91,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     .flex_col()
                     .min_w_0()
                     .child(label(instance.name.clone()))
-                    .child(status(instance.status, cx)),
+                    .child(status(instance.status(), cx)),
             )
             .on_click(cx.listener(move |shell, _, _, cx| shell.go(Page::Instance(ix), cx)))
     });
@@ -127,7 +126,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
             row("new", false, cx)
                 .child(tile(IconName::Plus, cx))
                 .child(label("New instance"))
-                .on_click(|_, window, cx| instance::create::open(window, cx)),
+                .on_click(move |_, window, cx| Shell::create(handle.clone(), window, cx)),
         )
         .child(
             row("settings", false, cx)

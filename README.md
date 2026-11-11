@@ -1,12 +1,13 @@
 # lulo
 
-Instance manager and launcher for Project Zomboid, written in Rust with [GPUI](https://www.gpui.rs/) and [gpui-component](https://github.com/longbridge/gpui-component).
+Instance launcher for Project Zomboid, rewritten from scratch in Rust.
 
-> Early development. Nothing usable yet.
+> Work in progress. Not usable yet.
 
-## Building
+Each instance is its own install: game version (Steam branch), mods and saves. lulo talks to Steam
+natively, no SteamCMD.
 
-Requires a recent stable Rust toolchain. On Linux you also need the usual GPUI system libraries (Vulkan, Wayland/X11, xkbcommon).
+## Build
 
 ```sh
 cargo run -p lulo

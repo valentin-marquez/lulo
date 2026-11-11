@@ -1,0 +1,52 @@
+//! Native Steam client for lulo: CM connection over WebSocket, PICS app info, content delivery.
+//!
+//! Protocol notes and the reference implementation live outside the repo (see CLAUDE.md).
+
+pub mod cm;
+pub mod directory;
+pub mod keyvalues;
+pub mod pics;
+
+#[allow(clippy::all, missing_docs)]
+pub mod proto {
+    include!(concat!(env!("OUT_DIR"), "/_.rs"));
+}
+
+pub use cm::Client;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("websocket: {0}")]
+    Socket(#[from] tokio_tungstenite::tungstenite::Error),
+    #[error("http: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("protobuf: {0}")]
+    Decode(#[from] prost::DecodeError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("malformed packet: {0}")]
+    Packet(&'static str),
+    #[error("malformed KeyValues: {0}")]
+    KeyValues(#[from] keyvalues::ParseError),
+    #[error("{context} failed with EResult {code}")]
+    Steam { code: i32, context: String },
+    #[error("connection closed by Steam")]
+    Closed,
+    #[error("no reachable CM server")]
+    NoServers,
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+/// HTTP client for Steam's web endpoints and CDN. Installs the TLS provider on first use.
+pub fn http() -> reqwest::Client {
+    tls();
+    reqwest::Client::new()
+}
+
+/// rustls needs a process-wide crypto provider; we ship `ring` so builds need no C toolchain
+/// beyond what Rust already requires on every OS.
+fn tls() {
+    // Err only means it was already installed.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}

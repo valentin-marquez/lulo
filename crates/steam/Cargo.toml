@@ -1,0 +1,24 @@
+[package]
+name = "steam"
+version.workspace = true
+edition.workspace = true
+description = "Native Steam client: CM over WebSocket, PICS, content delivery."
+
+[dependencies]
+flate2 = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+prost = "0.14"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+
+[build-dependencies]
+prost = "0.14"
+prost-build = "0.14"
+prost-types = "0.14"
+
+[lints]
+workspace = true

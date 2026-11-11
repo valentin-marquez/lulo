@@ -9,8 +9,11 @@ use crate::proto::{CMsgMulti, CMsgProtoBufHeader};
 use crate::{Error, Result};
 
 const PROTO_MASK: u32 = 0x8000_0000;
-/// CM bundles are small (KB to a few MB); anything past this is refused.
+/// CM bundles are small (KB to a few MB). The budget is shared by the whole expansion, so
+/// nested bundles can't multiply it.
 const MULTI_CAP: u64 = 32 << 20;
+/// Steam nests at most one Multi inside another; deeper is refused.
+const MULTI_DEPTH: usize = 2;
 
 /// Message ids we use (`enums_clientserver.proto`).
 pub mod emsg {
@@ -68,28 +71,46 @@ pub fn decode(bytes: &[u8]) -> Result<Packet> {
 
 /// Flattens `Multi` packets (recursively) into the packets they carry.
 pub fn expand(packet: Packet) -> Result<Vec<Packet>> {
+    let mut budget = MULTI_CAP;
+    let mut out = Vec::new();
+    expand_into(packet, 0, &mut budget, &mut out)?;
+    Ok(out)
+}
+
+fn expand_into(
+    packet: Packet,
+    depth: usize,
+    budget: &mut u64,
+    out: &mut Vec<Packet>,
+) -> Result<()> {
     if packet.emsg != emsg::MULTI {
-        return Ok(vec![packet]);
+        out.push(packet);
+        return Ok(());
+    }
+    if depth >= MULTI_DEPTH {
+        return Err(Error::Packet("Multi nested too deep"));
     }
     let multi = CMsgMulti::decode(packet.body.as_slice())?;
     let body = multi.message_body.unwrap_or_default();
     let data = if multi.size_unzipped.unwrap_or(0) > 0 {
-        crate::gunzip(&body, MULTI_CAP, "Multi packet")?
+        crate::gunzip(&body, *budget, "Multi packet")?
     } else {
         body
     };
+    *budget = budget
+        .checked_sub(data.len() as u64)
+        .ok_or(Error::TooLarge("Multi packet"))?;
 
-    let mut out = Vec::new();
     let mut at = 0;
     while at < data.len() {
         let len = u32_at(&data, at)? as usize;
         let inner = data
             .get(at + 4..at + 4 + len)
             .ok_or(Error::Packet("multi entry past end"))?;
-        out.extend(expand(decode(inner)?)?);
+        expand_into(decode(inner)?, depth + 1, budget, out)?;
         at += 4 + len;
     }
-    Ok(out)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -152,5 +173,20 @@ mod tests {
             .map(|p| p.header.jobid_source)
             .collect();
         assert_eq!(jobs, [Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn refuses_deeply_nested_multi() {
+        let mut packet = hello(1);
+        for _ in 0..=MULTI_DEPTH {
+            let mut body = (packet.len() as u32).to_le_bytes().to_vec();
+            body.extend_from_slice(&packet);
+            let multi = CMsgMulti {
+                size_unzipped: None,
+                message_body: Some(body),
+            };
+            packet = encode(emsg::MULTI, &CMsgProtoBufHeader::default(), &multi);
+        }
+        assert!(expand(decode(&packet).unwrap()).is_err());
     }
 }

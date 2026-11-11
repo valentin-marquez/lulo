@@ -1,10 +1,10 @@
-# Steam nativo — hallazgos de ingeniería inversa
+# Steam nativo: hallazgos de ingeniería inversa
 
 Build analizado: SteamCMD `1792617903` (steamclient.so / steamconsole.so de 2026-10).
 Leyenda: **[verificado]** = comprobado con bytes reales; **[observado]** = visto en logs de una ejecución real; **[pendiente]** = falta confirmar.
 
 ## 1. Esquemas
-- `protos/` — 109 `.proto` extraídos de `steamclient.so` (`extract_protos.py`, `render_protos.py`). **[verificado]**: el set cierra sin deps faltantes.
+- `protos/`: 109 `.proto` extraídos de `steamclient.so` (`extract_protos.py`, `render_protos.py`). **[verificado]**: el set cierra sin deps faltantes.
 - `protos/steamclient.fds.pb` → `prost_build::Config::compile_fds()` en Rust.
 - EMsg relevantes (`enums_clientserver.proto`): Multi=1, ServiceMethodResponse=147, ServiceMethodCallFromClient=151, ClientHeartBeat=703, ClientLogOnResponse=751, ChannelEncrypt*=1303-1305, ClientGetDepotDecryptionKey=5438/5439, ClientLogon=5514, ClientPICSProductInfo=8903/8904, ClientHello=9805.
 
@@ -69,7 +69,7 @@ Con implementación nativa estos estados son nuestros; sirven solo como referenc
   - 380870 servidor: 380871 (común, sin oslist) + 380872 mac / 380873 linux / 380874 windows. 1004-1006 = Steamworks redist. **Anónimo: clave OK en todos**.
   - 108600 juego: 108601 (sin manifests), 108602 mac / 108603 linux / 108604 windows; 228983-7 = redist Windows. **Anónimo: eresult 15 (AccessDenied)** → requiere cuenta que lo tenga.
 - Para instalar una versión: elegir rama → para cada depot cuyo `oslist` incluya el SO (o vacío) y tenga manifest en esa rama → descargar ese gid.
-- Pendiente: si se pueden pedir manifests **antiguos fuera de las ramas** (fijar build arbitrario) — no probado.
+- Pendiente: si se pueden pedir manifests **antiguos fuera de las ramas** (fijar build arbitrario). No probado.
 
 ## 9. Versiones de mods  **[verificado]** (anónimo)
 - `PublishedFile.GetChangeHistory {publishedfileid, count}` → `changes[]` con `timestamp`, `change_description` (changelog), `manifest_id` por versión, y `snapshot_game_branch_min/max` (rango de ramas del juego; vacío en los mods probados).

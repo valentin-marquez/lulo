@@ -164,7 +164,7 @@ def workshop(pubid, outdir):
     cm.send(EMSG['ClientGetDepotDecryptionKey'], k, jobid_source=cm.job)
     _, body = cm.wait(EMSG['ClientGetDepotDecryptionKeyResponse'], cm.job)
     kr = M('CMsgClientGetDepotDecryptionKeyResponse'); kr.ParseFromString(body)
-    print(f'<- DepotDecryptionKey eresult={kr.eresult} depot={kr.depot_id} key={kr.depot_encryption_key[:4].hex()}…')
+    print(f'<- DepotDecryptionKey eresult={kr.eresult} depot={kr.depot_id} key={kr.depot_encryption_key[:4].hex()}...')
     assert kr.eresult == 1
 
     # 3. Servidores de contenido

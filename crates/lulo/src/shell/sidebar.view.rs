@@ -91,7 +91,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     .flex_col()
                     .min_w_0()
                     .child(label(instance.name.clone()))
-                    .child(status(instance.status(shell.latest(instance)), cx)),
+                    .child(status(shell.status(instance), cx)),
             )
             .on_click(cx.listener(move |shell, _, _, cx| shell.go(Page::Instance(ix), cx)))
     });

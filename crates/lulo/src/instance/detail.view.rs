@@ -7,6 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Instance, Status};
+use crate::shell::Shell;
 use crate::ui::{Empty, FancyButton, Meta};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -51,22 +52,25 @@ impl Tab {
 
 pub struct Detail {
     instance: Instance,
-    latest: Option<u32>,
     tab: Tab,
+    shell: WeakEntity<Shell>,
 }
 
 impl Detail {
-    pub fn new(instance: Instance, latest: Option<u32>) -> Self {
+    pub fn new(instance: Instance, shell: WeakEntity<Shell>) -> Self {
         Self {
             instance,
-            latest,
             tab: Tab::Mods,
+            shell,
         }
     }
 
-    pub fn show(&mut self, instance: Instance, latest: Option<u32>, cx: &mut Context<Self>) {
+    pub fn id(&self) -> SharedString {
+        self.instance.id.clone()
+    }
+
+    pub fn show(&mut self, instance: Instance, cx: &mut Context<Self>) {
         self.instance = instance;
-        self.latest = latest;
         cx.notify();
     }
 
@@ -74,7 +78,11 @@ impl Detail {
         let theme = cx.theme();
         let instance = &self.instance;
         let played = instance.played();
-        let outdated = match (instance.status(self.latest), instance.build, self.latest) {
+        let latest = self
+            .shell
+            .upgrade()
+            .and_then(|shell| shell.read(cx).latest(instance));
+        let outdated = match (instance.status(latest), instance.build, latest) {
             (Status::Outdated, Some(have), Some(newest)) => {
                 Some(format!("Update available: build {have}, newest {newest}"))
             }
@@ -129,7 +137,23 @@ impl Detail {
                     .size(px(40.))
                     .rounded(px(10.)),
             )
-            .child(FancyButton::new("play", "Play").icon(IconName::Play))
+            .child({
+                let status = self
+                    .shell
+                    .upgrade()
+                    .map_or(instance.status(latest), |shell| {
+                        shell.read(cx).status(instance)
+                    });
+                let (label, icon, enabled) = status.action();
+                let (shell, id) = (self.shell.clone(), instance.id.clone());
+                FancyButton::new("play", label)
+                    .icon(icon)
+                    .when(enabled, |button| {
+                        button.on_click(move |_, window, cx| {
+                            Shell::play(shell.clone(), id.clone(), window, cx)
+                        })
+                    })
+            })
     }
 
     fn tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {

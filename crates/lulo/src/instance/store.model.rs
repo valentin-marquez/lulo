@@ -86,11 +86,23 @@ pub fn create(root: &Path, name: &str, branch: &str) -> io::Result<Instance> {
         last_played: None,
         created: now(),
     };
+    write(&dir, &manifest)?;
+    Ok(instance(id, dir, &manifest))
+}
+
+/// Records the Steam build now installed in the instance's `game/`.
+pub fn set_build(dir: &Path, build: u32) -> io::Result<()> {
+    let path = dir.join(FILE);
+    let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    manifest.build = Some(build);
+    write(dir, &manifest)
+}
+
+fn write(dir: &Path, manifest: &Manifest) -> io::Result<()> {
     // Write then rename, so a crash never leaves a half-written manifest.
     let tmp = dir.join(format!("{FILE}.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&manifest)?)?;
-    std::fs::rename(&tmp, dir.join(FILE))?;
-    Ok(instance(id, dir, &manifest))
+    std::fs::write(&tmp, serde_json::to_vec_pretty(manifest)?)?;
+    std::fs::rename(&tmp, dir.join(FILE))
 }
 
 fn instance(id: String, dir: PathBuf, m: &Manifest) -> Instance {
@@ -140,7 +152,14 @@ mod tests {
         assert_eq!(b.id.as_ref(), "brita-s-armory-2");
         assert!(a.dir.join("game").is_dir() && a.dir.join("zomboid").is_dir());
 
+        set_build(&a.dir, 26486631).unwrap();
+
         let listed = list(&root);
+        assert!(
+            listed
+                .iter()
+                .any(|i| i.id == a.id && i.build == Some(26486631))
+        );
         assert_eq!(listed.len(), 2);
         assert!(
             listed

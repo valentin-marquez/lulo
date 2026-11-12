@@ -10,18 +10,13 @@ use crate::instance::{Instance, Status};
 use crate::shell::{Page, Shell};
 use crate::ui::{Empty, FancyButton, Meta};
 
-fn row(
-    ix: usize,
-    instance: &Instance,
-    latest: Option<u32>,
-    cx: &mut Context<Shell>,
-) -> Stateful<Div> {
+fn row(ix: usize, instance: &Instance, shell: &Shell, cx: &mut Context<Shell>) -> Stateful<Div> {
     let theme = cx.theme();
     let played = instance.played();
-    let status = match instance.status(latest) {
-        Status::Ready => None,
-        other => Some(other.label()),
-    };
+    let current = shell.status(instance);
+    let status = (current != Status::Ready).then(|| current.label());
+    let (action, icon, enabled) = current.action();
+    let (handle, id) = (cx.entity().downgrade(), instance.id.clone());
     let dir = instance.dir.clone();
 
     div()
@@ -88,9 +83,15 @@ fn row(
                 }),
         )
         .child(
-            FancyButton::new(SharedString::from(format!("play-{}", instance.id)), "Play")
+            FancyButton::new(SharedString::from(format!("play-{}", instance.id)), action)
                 .small()
-                .icon(IconName::Play),
+                .icon(icon)
+                .when(enabled, |button| {
+                    button.on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        Shell::play(handle.clone(), id.clone(), window, cx);
+                    })
+                }),
         )
         .on_click(cx.listener(move |shell, _, _, cx| shell.go(Page::Instance(ix), cx)))
 }
@@ -99,7 +100,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
     let handle = cx.entity().downgrade();
     let mut rows = Vec::new();
     for (ix, instance) in shell.instances().iter().enumerate() {
-        rows.push(row(ix, instance, shell.latest(instance), cx));
+        rows.push(row(ix, instance, shell, cx));
     }
     let theme = cx.theme();
 

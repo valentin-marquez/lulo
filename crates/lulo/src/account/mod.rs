@@ -19,6 +19,20 @@ pub struct Account {
     refresh_token: String,
 }
 
+impl Account {
+    /// A CM connection logged on as this account. Call it on the background runtime.
+    pub async fn client(
+        &self,
+        http: &steam::reqwest::Client,
+    ) -> Result<steam::Client, steam::Error> {
+        let mut client = steam::Client::connect(http).await?;
+        client
+            .user(&self.name, &self.refresh_token, self.steamid)
+            .await?;
+        Ok(client)
+    }
+}
+
 fn entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, ENTRY).map_err(|err| err.to_string())
 }

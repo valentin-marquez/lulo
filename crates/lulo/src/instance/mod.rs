@@ -6,12 +6,18 @@ pub mod branches;
 pub mod create;
 #[path = "detail.view.rs"]
 pub mod detail;
+#[path = "install.model.rs"]
+pub mod install;
 #[path = "store.model.rs"]
 pub mod store;
 
 use std::path::PathBuf;
 
 use gpui_kit::SharedString;
+use gpui_kit::assets::IconName;
+
+/// Project Zomboid's Steam app id.
+pub const APP: u32 = 108600;
 
 #[derive(Clone)]
 pub struct Instance {
@@ -27,10 +33,12 @@ pub struct Instance {
     pub last_played: Option<u64>,
 }
 
-// ponytail: Downloading comes back with installs (roadmap 5).
+// ponytail: Downloading lives in the shell (installs in progress), not on disk.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Status {
     NotInstalled,
+    /// Percent done.
+    Installing(u8),
     Ready,
     Outdated,
 }
@@ -54,11 +62,22 @@ impl Instance {
 }
 
 impl Status {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Status::NotInstalled => "Not installed",
-            Status::Ready => "Ready",
-            Status::Outdated => "Update available",
+            Status::NotInstalled => "Not installed".into(),
+            Status::Installing(pct) => format!("Installing {pct}%"),
+            Status::Ready => "Ready".into(),
+            Status::Outdated => "Update available".into(),
+        }
+    }
+
+    /// The main button: label, icon, and whether it can be clicked.
+    pub fn action(self) -> (String, IconName, bool) {
+        match self {
+            Status::NotInstalled => ("Install".into(), IconName::Download, true),
+            Status::Installing(pct) => (format!("Installing {pct}%"), IconName::Download, false),
+            // Updating waits for the user's confirmation (#18); Play still works meanwhile.
+            Status::Ready | Status::Outdated => ("Play".into(), IconName::Play, true),
         }
     }
 }

@@ -124,19 +124,17 @@ pub async fn install(
         }
     }
 
-    let jobs = manifest
+    // Owned jobs and a plain async fn keep the stream `Send`, so installs can be spawned.
+    let jobs: Vec<(usize, manifest::Chunk)> = manifest
         .files
         .iter()
         .enumerate()
         .filter(|(_, f)| !f.is_dir)
-        .flat_map(|(ix, f)| f.chunks.iter().map(move |c| (ix, c)));
-    let mut chunks = stream::iter(jobs.map(|(ix, c)| async move {
-        let url = format!("https://{host}/depot/{depot}/chunk/{}", c.id());
-        let raw =
-            crate::read_capped(http.get(url).send().await?, c.compressed as usize, "chunk").await?;
-        Ok::<_, Error>((ix, c, chunk::open(key, &raw, c)?))
-    }))
-    .buffered(PARALLEL);
+        .flat_map(|(ix, f)| f.chunks.iter().cloned().map(move |c| (ix, c)))
+        .collect();
+    let mut chunks = stream::iter(jobs)
+        .map(|(ix, c)| fetch(http, host, depot, key, ix, c))
+        .buffered(PARALLEL);
 
     let mut open: Option<Open> = None;
     let mut done = 0;
@@ -173,6 +171,25 @@ pub async fn install(
         last.finish(manifest).await?;
     }
     Ok(())
+}
+
+async fn fetch(
+    http: &reqwest::Client,
+    host: &str,
+    depot: u32,
+    key: &Key,
+    ix: usize,
+    chunk: manifest::Chunk,
+) -> Result<(usize, manifest::Chunk, Vec<u8>)> {
+    let url = format!("https://{host}/depot/{depot}/chunk/{}", chunk.id());
+    let raw = crate::read_capped(
+        http.get(url).send().await?,
+        chunk.compressed as usize,
+        "chunk",
+    )
+    .await?;
+    let plain = chunk::open(key, &raw, &chunk)?;
+    Ok((ix, chunk, plain))
 }
 
 /// The file being written while its chunks stream in.

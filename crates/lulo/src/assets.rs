@@ -7,7 +7,9 @@ use gpui_kit::*;
 
 icon_assets!(
     Icons,
-    [Box, Clock, Compass, GitBranch, House, Image, Puzzle]
+    [
+        Box, Clock, Compass, Download, GitBranch, House, Image, Puzzle
+    ]
 );
 
 pub const LOGO: &str = "brand/lulo-64.png";

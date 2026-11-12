@@ -13,7 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::account::{self, Account};
-use crate::instance::{self, Instance, detail::Detail, store};
+use crate::instance::{self, Instance, Status, detail::Detail, install, store};
 use crate::ui::Loader;
 use crate::{home, screenshots};
 use topbar::Topbar;
@@ -33,6 +33,8 @@ pub struct Shell {
     account: Option<Account>,
     /// Newest Steam build id per branch name; empty until the first check succeeds.
     latest: HashMap<SharedString, u32>,
+    /// Installs in progress: percent done by instance id.
+    installs: HashMap<SharedString, u8>,
     /// Shows the loader under the title bar while the page's data loads.
     // ponytail: listing instances is instant; installs (roadmap 5) will set it.
     loading: bool,
@@ -52,6 +54,7 @@ impl Shell {
         let mut shell = Self {
             account: None,
             latest: HashMap::new(),
+            installs: HashMap::new(),
             instances: store::list(&root),
             root,
             page: Page::Home,
@@ -81,8 +84,7 @@ impl Shell {
                 if let (Page::Instance(ix), Some(detail)) = (shell.page, &shell.detail)
                     && let Some(instance) = shell.instances.get(ix).cloned()
                 {
-                    let latest = shell.latest(&instance);
-                    detail.update(cx, |d, cx| d.show(instance, latest, cx));
+                    detail.update(cx, |d, cx| d.show(instance, cx));
                 }
                 cx.notify();
             });
@@ -99,14 +101,107 @@ impl Shell {
             let Some(instance) = self.instances.get(ix).cloned() else {
                 return;
             };
-            let latest = self.latest(&instance);
             match &self.detail {
-                Some(detail) => detail.update(cx, |d, cx| d.show(instance, latest, cx)),
-                None => self.detail = Some(cx.new(|_| Detail::new(instance, latest))),
+                Some(detail) => detail.update(cx, |d, cx| d.show(instance, cx)),
+                None => {
+                    let shell = cx.entity().downgrade();
+                    self.detail = Some(cx.new(|_| Detail::new(instance, shell)));
+                }
             }
             self.check_builds(cx);
         }
         self.page = page;
+        cx.notify();
+    }
+
+    pub fn status(&self, instance: &Instance) -> Status {
+        match self.installs.get(&instance.id) {
+            Some(pct) => Status::Installing(*pct),
+            None => instance.status(self.latest(instance)),
+        }
+    }
+
+    /// The main button of an instance: install it if needed, else launch it.
+    pub fn play(shell: WeakEntity<Shell>, id: SharedString, window: &mut Window, cx: &mut App) {
+        let Ok((instance, account)) = shell.read_with(cx, |shell, _| {
+            let instance = shell.instances.iter().find(|i| i.id == id).cloned();
+            (instance, shell.account.clone())
+        }) else {
+            return;
+        };
+        let Some(instance) = instance else { return };
+        use gpui_kit::component::WindowExt;
+        let status = shell
+            .read_with(cx, |shell, _| shell.status(&instance))
+            .unwrap_or(Status::Ready);
+        match (status, account) {
+            (Status::Ready | Status::Outdated, _) => {
+                // ponytail: launching is the next roadmap issue (#15).
+                window.push_notification("Launching is not available yet.", cx);
+            }
+            (Status::Installing(_), _) => {}
+            (_, None) => Self::open_account(shell, window, cx),
+            (_, Some(account)) => {
+                let _ = shell.update(cx, |shell, cx| shell.install(instance, account, cx));
+            }
+        }
+    }
+
+    fn install(&mut self, instance: Instance, account: Account, cx: &mut Context<Self>) {
+        if self.installs.contains_key(&instance.id) {
+            return;
+        }
+        let id = instance.id.clone();
+        self.installs.insert(id.clone(), 0);
+        self.changed(cx);
+        let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        install::start(account, instance, events_tx);
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = events.recv().await {
+                let _ = this.update(cx, |shell, cx| match event {
+                    install::Event::Progress { done, total } => {
+                        let pct = (done * 100).checked_div(total).unwrap_or(0).min(99) as u8;
+                        if shell.installs.insert(id.clone(), pct) != Some(pct) {
+                            shell.changed(cx);
+                        }
+                    }
+                    install::Event::Done => {
+                        shell.installs.remove(&id);
+                        shell.reload(cx);
+                    }
+                    install::Event::Failed(err) => {
+                        shell.installs.remove(&id);
+                        shell.changed(cx);
+                        if let Some(window) = cx.active_window() {
+                            let _ = window.update(cx, |_, window, cx| {
+                                use gpui_kit::component::WindowExt;
+                                window.push_notification(format!("Install failed: {err}"), cx);
+                            });
+                        }
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Re-reads instances from disk, keeping the current page.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        self.instances = store::list(&self.root);
+        if let (Page::Instance(_), Some(detail)) = (self.page, &self.detail) {
+            let shown = detail.read(cx).id();
+            if let Some(ix) = self.instances.iter().position(|i| i.id == shown) {
+                return self.go(Page::Instance(ix), cx);
+            }
+        }
+        self.changed(cx);
+    }
+
+    /// Repaints the shell and the detail view (a child entity doesn't redraw on its own).
+    fn changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(detail) = &self.detail {
+            detail.update(cx, |_, cx| cx.notify());
+        }
         cx.notify();
     }
 

@@ -5,8 +5,6 @@ use std::time::{Duration, Instant};
 
 pub use steam::pics::Branch;
 
-const PROJECT_ZOMBOID: u32 = 108600;
-
 /// Opening an instance asks again, so the cache only spares repeated fetches within minutes.
 const TTL: Duration = Duration::from_secs(600);
 static CACHE: Mutex<Option<(Instant, Vec<Branch>)>> = Mutex::new(None);
@@ -21,7 +19,7 @@ pub async fn fetch() -> Result<Vec<Branch>, String> {
     let branches = crate::runtime::spawn(async {
         let http = steam::http();
         let mut client = steam::Client::anonymous(&http).await?;
-        let info = steam::pics::app_info(&mut client, &http, PROJECT_ZOMBOID).await?;
+        let info = steam::pics::app_info(&mut client, &http, super::APP).await?;
         Ok::<_, steam::Error>(steam::pics::branches(&info))
     })
     .await

@@ -16,6 +16,8 @@ pub mod proto {
 }
 
 pub use cm::Client;
+/// Re-exported so callers can name the HTTP client type `steam::http()` returns.
+pub use reqwest;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

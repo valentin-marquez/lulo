@@ -28,11 +28,11 @@ async fn main() -> steam::Result<()> {
         .expect("depot has a manifest on that branch");
 
     let key = steam::content::depot_key(&mut client, app, depot).await?;
-    let host = steam::content::cdn_host(&mut client).await?;
+    let hosts = steam::content::cdn_hosts(&mut client).await?;
     let manifest = steam::content::manifest(
         &mut client,
         &http,
-        &host,
+        &hosts[0],
         (app, depot, manifest_id),
         branch,
         &key,
@@ -41,9 +41,9 @@ async fn main() -> steam::Result<()> {
     let total: u64 = manifest.files.iter().map(|f| f.size).sum();
 
     let start = Instant::now();
-    steam::content::install(
+    let timings = steam::content::install(
         &http,
-        &host,
+        &hosts,
         depot,
         &key,
         &manifest,
@@ -53,10 +53,12 @@ async fn main() -> steam::Result<()> {
     .await?;
     let secs = start.elapsed().as_secs_f64();
     println!(
-        "{} files, {:.1} MB in {secs:.1} s ({:.1} MB/s) from {host}",
+        "{} files, {:.1} MB in {secs:.1} s ({:.1} MB/s) from {}",
         manifest.files.len(),
         total as f64 / 1e6,
-        total as f64 / 1e6 / secs
+        total as f64 / 1e6 / secs,
+        hosts.join(", ")
     );
+    println!("{timings:?}");
     Ok(())
 }

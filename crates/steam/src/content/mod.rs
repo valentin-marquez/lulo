@@ -5,9 +5,9 @@ pub mod crypto;
 pub mod manifest;
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use sha1::{Digest, Sha1};
-use tokio::io::AsyncWriteExt;
 
 use crate::cm::packet::emsg;
 use crate::proto::{
@@ -43,20 +43,24 @@ pub async fn depot_key(client: &mut Client, app: u32, depot: u32) -> Result<Key>
         .ok_or(Error::Packet("depot key is not 32 bytes"))
 }
 
-/// A CDN host that serves HTTPS, nearest first as Steam orders them for our cell.
-pub async fn cdn_host(client: &mut Client) -> Result<String> {
+/// CDN hosts that serve HTTPS, nearest first as Steam orders them for our cell.
+pub async fn cdn_hosts(client: &mut Client) -> Result<Vec<String>> {
     let request = CContentServerDirectoryGetServersForSteamPipeRequest {
         cell_id: Some(client.cell_id),
     };
     let reply: CContentServerDirectoryGetServersForSteamPipeResponse = client
         .call("ContentServerDirectory.GetServersForSteamPipe", &request)
         .await?;
-    reply
+    let hosts: Vec<String> = reply
         .servers
         .into_iter()
-        .find(|s| matches!(s.https_support(), "mandatory" | "optional"))
-        .and_then(|s| s.host)
-        .ok_or(Error::NoServers)
+        .filter(|s| matches!(s.https_support(), "mandatory" | "optional"))
+        .filter_map(|s| s.host)
+        .collect();
+    if hosts.is_empty() {
+        return Err(Error::NoServers);
+    }
+    Ok(hosts)
 }
 
 /// Downloads and parses manifest `id` of `depot`. `branch` is the app branch it belongs to
@@ -87,25 +91,41 @@ pub async fn manifest(
     manifest::parse(&zip, key)
 }
 
-/// Chunks downloaded at once. Order is kept, so files are still written front to back.
-const PARALLEL: usize = 16;
+/// Chunks downloaded at once. They finish in any order and are written at their offset, so
+/// one slow chunk doesn't hold back the others.
+const PARALLEL: usize = 32;
 
-/// Writes every file of `manifest` under `dir`, verifying each chunk and each whole file.
-/// Files already on disk with the right size and SHA-1 are kept, so an interrupted install
-/// resumes. `progress` receives the bytes done so far, kept files included.
+/// Tries per chunk, each on the next CDN host, before the install fails.
+const TRIES: usize = 3;
+
+/// Where an install's time went. Network and decode are summed over chunks in flight at once,
+/// so they can add up to more than the wall time; compare them with each other.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Timings {
+    pub network: Duration,
+    pub decode: Duration,
+    pub write: Duration,
+}
+
+/// Writes every file of `manifest` under `dir`, verifying each chunk. Files already on disk
+/// with the right size and SHA-1 are kept, so an interrupted install resumes. `progress`
+/// receives the bytes done so far, kept files included.
 // ponytail: a file that changed is downloaded whole; reusing its unchanged chunks (updates
 // between builds) is #24.
 pub async fn install(
     http: &reqwest::Client,
-    host: &str,
+    hosts: &[String],
     depot: u32,
     key: &Key,
     manifest: &Manifest,
     dir: &Path,
     mut progress: impl FnMut(u64),
-) -> Result<()> {
+) -> Result<Timings> {
     use futures_util::{StreamExt, stream};
 
+    if hosts.is_empty() {
+        return Err(Error::NoServers);
+    }
     // Folders and empty files first; everything else is written as its chunks arrive.
     for file in &manifest.files {
         let path = target(dir, &file.path)?;
@@ -123,65 +143,73 @@ pub async fn install(
         }
     }
 
-    let mut kept = vec![false; manifest.files.len()];
+    let mut left = vec![0; manifest.files.len()];
     let mut done = 0;
     for (ix, file) in manifest.files.iter().enumerate() {
-        if !file.is_dir && !file.chunks.is_empty() && verified(target(dir, &file.path)?, file).await
-        {
-            kept[ix] = true;
-            done += file.size;
+        if file.is_dir || file.chunks.is_empty() {
+            continue;
         }
+        let path = target(dir, &file.path)?;
+        if verified(path.clone(), file).await {
+            done += file.size;
+            continue;
+        }
+        // Each chunk is checked against its SHA-1; if they also tile the file exactly, the
+        // file is right once all of them are written, whatever order they arrive in.
+        if !tiles(file) {
+            return Err(Error::Packet("chunks don't tile the file"));
+        }
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::File::create(&path)
+            .await?
+            .set_len(file.size)
+            .await?;
+        left[ix] = file.chunks.len();
     }
     if done > 0 {
         progress(done);
     }
 
     // Owned jobs and a plain async fn keep the stream `Send`, so installs can be spawned.
-    let jobs: Vec<(usize, manifest::Chunk)> = manifest
-        .files
-        .iter()
-        .enumerate()
-        .filter(|(ix, f)| !f.is_dir && !kept[*ix])
-        .flat_map(|(ix, f)| f.chunks.iter().cloned().map(move |c| (ix, c)))
-        .collect();
+    let mut jobs = Vec::new();
+    for (ix, file) in manifest.files.iter().enumerate() {
+        if left[ix] > 0 {
+            let path = std::sync::Arc::new(target(dir, &file.path)?);
+            jobs.extend(file.chunks.iter().map(|c| (ix, path.clone(), c.clone())));
+        }
+    }
     let mut chunks = stream::iter(jobs)
-        .map(|(ix, c)| fetch(http, host, depot, key, ix, c))
-        .buffered(PARALLEL);
+        .map(|(ix, path, c)| fetch(http, hosts, depot, *key, ix, path, c))
+        .buffer_unordered(PARALLEL);
 
-    let mut open: Option<Open> = None;
+    let mut timings = Timings::default();
     while let Some(next) = chunks.next().await {
-        let (ix, c, plain) = next?;
-        if open.as_ref().is_none_or(|o| o.ix != ix) {
-            if let Some(previous) = open.take() {
-                previous.finish(manifest).await?;
-            }
-            let path = target(dir, &manifest.files[ix].path)?;
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            open = Some(Open {
-                ix,
-                out: tokio::fs::File::create(&path).await?,
-                path,
-                hash: Sha1::new(),
-                written: 0,
-            });
-        }
-        let file = open.as_mut().expect("opened above");
-        // Chunks are sorted by offset; they must tile the file with no gaps or overlaps.
-        if c.offset != file.written || file.written + plain.len() as u64 > manifest.files[ix].size {
-            return Err(Error::Packet("chunks don't tile the file"));
-        }
-        file.out.write_all(&plain).await?;
-        file.hash.update(&plain);
-        file.written += plain.len() as u64;
-        done += plain.len() as u64;
+        let (ix, path, written, spent) = next?;
+        timings.network += spent.network;
+        timings.decode += spent.decode;
+        timings.write += spent.write;
+        done += written;
         progress(done);
+        left[ix] -= 1;
+        if left[ix] == 0 {
+            executable(&path).await?;
+        }
     }
-    if let Some(last) = open {
-        last.finish(manifest).await?;
+    Ok(timings)
+}
+
+/// Whether the chunks, sorted by offset, cover the file end to end with no gaps or overlaps.
+fn tiles(file: &manifest::File) -> bool {
+    let mut end = 0;
+    for chunk in &file.chunks {
+        if chunk.offset != end {
+            return false;
+        }
+        end += u64::from(chunk.original);
     }
-    Ok(())
+    end == file.size
 }
 
 /// Whether `path` already holds `file`: same size and SHA-1.
@@ -203,41 +231,70 @@ async fn verified(path: std::path::PathBuf, file: &manifest::File) -> bool {
 
 async fn fetch(
     http: &reqwest::Client,
+    hosts: &[String],
+    depot: u32,
+    key: Key,
+    ix: usize,
+    path: std::sync::Arc<std::path::PathBuf>,
+    chunk: manifest::Chunk,
+) -> Result<(usize, std::sync::Arc<std::path::PathBuf>, u64, Timings)> {
+    let mut spent = Timings::default();
+    let mut tries = 0;
+    let plain = loop {
+        let host = &hosts[(ix + tries) % hosts.len()];
+        tries += 1;
+        match download(http, host, depot, key, &chunk, &mut spent).await {
+            Ok(plain) => break plain,
+            // A dropped connection or a corrupt chunk is usually one bad host or a hiccup.
+            Err(err) if tries < TRIES && !matches!(err, Error::Io(_)) => continue,
+            Err(err) => return Err(err),
+        }
+    };
+    let started = Instant::now();
+    let written = plain.len() as u64;
+    let file = path.clone();
+    tokio::task::spawn_blocking(move || {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut out = std::fs::OpenOptions::new().write(true).open(&*file)?;
+        out.seek(SeekFrom::Start(chunk.offset))?;
+        out.write_all(&plain)
+    })
+    .await
+    .map_err(|_| Error::Packet("chunk writer stopped"))??;
+    spent.write = started.elapsed();
+    Ok((ix, path, written, spent))
+}
+
+/// One chunk from one host, decrypted and verified.
+async fn download(
+    http: &reqwest::Client,
     host: &str,
     depot: u32,
-    key: &Key,
-    ix: usize,
-    chunk: manifest::Chunk,
-) -> Result<(usize, manifest::Chunk, Vec<u8>)> {
+    key: Key,
+    chunk: &manifest::Chunk,
+    spent: &mut Timings,
+) -> Result<Vec<u8>> {
+    let started = Instant::now();
     let url = format!("https://{host}/depot/{depot}/chunk/{}", chunk.id());
     let raw = crate::read_capped(
         http.get(url).send().await?,
         chunk.compressed as usize,
         "chunk",
     )
-    .await?;
-    let plain = chunk::open(key, &raw, &chunk)?;
-    Ok((ix, chunk, plain))
-}
-
-/// The file being written while its chunks stream in.
-struct Open {
-    ix: usize,
-    path: std::path::PathBuf,
-    out: tokio::fs::File,
-    hash: Sha1,
-    written: u64,
-}
-
-impl Open {
-    async fn finish(mut self, manifest: &Manifest) -> Result<()> {
-        let file = &manifest.files[self.ix];
-        self.out.flush().await?;
-        if self.written != file.size || self.hash.finalize().as_slice() != file.sha.as_slice() {
-            return Err(Error::Packet("file failed verification"));
-        }
-        executable(&self.path).await
-    }
+    .await;
+    spent.network += started.elapsed();
+    let raw = raw?;
+    // Decrypt and LZMA take most of an install's CPU; on the blocking pool they use every core
+    // instead of the one thread polling the stream.
+    let chunk = chunk.clone();
+    let (plain, decode) = tokio::task::spawn_blocking(move || {
+        let started = Instant::now();
+        chunk::open(&key, &raw, &chunk).map(|plain| (plain, started.elapsed()))
+    })
+    .await
+    .map_err(|_| Error::Packet("chunk decoder stopped"))??;
+    spent.decode += decode;
+    Ok(plain)
 }
 
 /// `dir/path`, refusing anything that would land outside `dir`. `manifest::parse` already
@@ -292,5 +349,25 @@ mod tests {
         assert!(!verified(path.clone(), &file(b"ab")).await, "other size");
         assert!(!verified(dir.join("missing"), &file(b"abc")).await);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn chunks_must_tile_the_file() {
+        let chunk = |offset, original| manifest::Chunk {
+            sha: Vec::new(),
+            crc: 0,
+            offset,
+            original,
+            compressed: 0,
+        };
+        let with = |size, chunks| manifest::File {
+            size,
+            chunks,
+            ..file(b"")
+        };
+        assert!(tiles(&with(10, vec![chunk(0, 4), chunk(4, 6)])));
+        assert!(!tiles(&with(10, vec![chunk(0, 4), chunk(5, 5)])), "gap");
+        assert!(!tiles(&with(10, vec![chunk(0, 6), chunk(4, 6)])), "overlap");
+        assert!(!tiles(&with(12, vec![chunk(0, 4), chunk(4, 6)])), "short");
     }
 }

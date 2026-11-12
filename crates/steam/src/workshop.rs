@@ -50,15 +50,17 @@ pub async fn download(
     dir: &Path,
 ) -> Result<()> {
     let key = content::depot_key(client, item.app, item.app).await?;
-    let host = content::cdn_host(client).await?;
+    let hosts = content::cdn_hosts(client).await?;
     let manifest = content::manifest(
         client,
         http,
-        &host,
+        &hosts[0],
         (item.app, item.app, item.manifest),
         "public",
         &key,
     )
     .await?;
-    content::install(http, &host, item.app, &key, &manifest, dir, |_| {}).await
+    content::install(http, &hosts, item.app, &key, &manifest, dir, |_| {})
+        .await
+        .map(drop)
 }

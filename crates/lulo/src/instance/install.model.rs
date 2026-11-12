@@ -158,7 +158,7 @@ async fn install(
     }
 
     // Keys and manifests need the CM session; the files themselves come from the CDN.
-    let host = content::cdn_host(&mut client)
+    let hosts = content::cdn_hosts(&mut client)
         .await
         .map_err(|e| e.to_string())?;
     let mut plan = Vec::new();
@@ -174,7 +174,7 @@ async fn install(
         let manifest = content::manifest(
             &mut client,
             &http,
-            &host,
+            &hosts[0],
             (APP, depot.id, depot.manifest),
             branch,
             &key,
@@ -193,7 +193,7 @@ async fn install(
     let game = instance.dir.join("game");
     let mut before = 0;
     for (depot, key, manifest) in &plan {
-        content::install(&http, &host, *depot, key, manifest, &game, |done| {
+        let timings = content::install(&http, &hosts, *depot, key, manifest, &game, |done| {
             let _ = events.send(Event::Progress {
                 done: before + done,
                 total,
@@ -201,6 +201,7 @@ async fn install(
         })
         .await
         .map_err(|e| e.to_string())?;
+        eprintln!("depot {depot}: {timings:?}");
         before += manifest.files.iter().map(|f| f.size).sum::<u64>();
     }
     Ok(build)

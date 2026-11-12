@@ -19,3 +19,7 @@ all = { level = "warn", priority = -1 }
 # GPUI is very slow unoptimized; optimize dependencies, keep our crate fast to rebuild.
 [profile.dev.package."*"]
 opt-level = 2
+
+# Chunk decrypt and LZMA run about 5x slower unoptimized, which made dev installs CPU-bound.
+[profile.dev.package.steam]
+opt-level = 3

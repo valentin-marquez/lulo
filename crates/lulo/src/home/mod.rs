@@ -20,7 +20,8 @@ fn row(ix: usize, instance: &Instance, shell: &Shell, cx: &mut Context<Shell>) -
     let dir = instance.dir.clone();
 
     div()
-        .id(instance.id.clone())
+        // Not the bare instance id: the sidebar row uses it, and twin ids share click state.
+        .id(SharedString::from(format!("home-{}", instance.id)))
         .flex()
         .items_center()
         .gap_4()

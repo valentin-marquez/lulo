@@ -1,5 +1,8 @@
 //! Installing an instance's branch: depots for this OS, downloaded and verified into `game/`.
 
+use std::time::Instant;
+
+use gpui_kit::SharedString;
 use steam::{content, pics};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -15,6 +18,93 @@ pub enum Event {
     /// The build is recorded in the instance; reload it from disk.
     Done,
     Failed(String),
+}
+
+/// An install in progress, as the download manager shows it.
+pub struct Download {
+    pub name: SharedString,
+    pub done: u64,
+    pub total: u64,
+    /// Bytes per second over the last second or so; 0 until measured.
+    pub speed: u64,
+    sample: Option<(Instant, u64)>,
+    cancel: tokio::task::AbortHandle,
+}
+
+impl Download {
+    pub fn new(name: SharedString, cancel: tokio::task::AbortHandle) -> Self {
+        Self {
+            name,
+            done: 0,
+            total: 0,
+            speed: 0,
+            sample: None,
+            cancel,
+        }
+    }
+
+    /// Records progress; returns whether anything shown changed (percent or speed).
+    pub fn progress(&mut self, done: u64, total: u64, now: Instant) -> bool {
+        let before = (self.pct(), self.speed);
+        (self.done, self.total) = (done, total);
+        match self.sample {
+            // The first report can be files kept from an earlier install, not downloaded now.
+            None => self.sample = Some((now, done)),
+            Some((at, from)) => {
+                let elapsed = now.duration_since(at).as_secs_f64();
+                if elapsed >= 1. {
+                    self.speed = (done.saturating_sub(from) as f64 / elapsed) as u64;
+                    self.sample = Some((now, done));
+                }
+            }
+        }
+        before != (self.pct(), self.speed)
+    }
+
+    /// Percent done, held at 99 until the build is recorded.
+    pub fn pct(&self) -> u8 {
+        (self.done * 100)
+            .checked_div(self.total)
+            .unwrap_or(0)
+            .min(99) as u8
+    }
+
+    /// "4 min left", once the speed is known.
+    pub fn left(&self) -> Option<String> {
+        let secs = self
+            .total
+            .saturating_sub(self.done)
+            .checked_div(self.speed)?;
+        Some(match secs {
+            0..60 => format!("{secs} s left"),
+            60..3600 => format!("{} min left", secs.div_ceil(60)),
+            _ => format!("{} h {} min left", secs / 3600, secs % 3600 / 60),
+        })
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.abort();
+    }
+}
+
+/// "512 KB", "3.4 GB": decimal units, like Steam shows them.
+pub fn size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    if value < 1000. {
+        return format!("{bytes} B");
+    }
+    let mut unit = 0;
+    value /= 1000.;
+    while value >= 1000. && unit < UNITS.len() - 1 {
+        value /= 1000.;
+        unit += 1;
+    }
+    if value < 10. {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
+    }
 }
 
 /// The OS name appinfo uses in `oslist`.
@@ -114,4 +204,33 @@ async fn install(
         before += manifest.files.iter().map(|f| f.size).sum::<u64>();
     }
     Ok(build)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn sizes_read_like_steam() {
+        assert_eq!(size(512), "512 B");
+        assert_eq!(size(1_500), "1.5 KB");
+        assert_eq!(size(42_000_000), "42 MB");
+        assert_eq!(size(3_400_000_000), "3.4 GB");
+    }
+
+    #[test]
+    fn speed_skips_kept_files_and_estimates_time_left() {
+        let cancel = runtime::spawn(async {}).abort_handle();
+        let mut download = Download::new("a".into(), cancel);
+        let start = Instant::now();
+        // 500 MB kept from an earlier install arrive at once; they are not download speed.
+        download.progress(500_000_000, 1_000_000_000, start);
+        assert_eq!((download.speed, download.left()), (0, None));
+        download.progress(510_000_000, 1_000_000_000, start + Duration::from_secs(1));
+        assert_eq!(download.speed, 10_000_000);
+        assert_eq!(download.left().as_deref(), Some("49 s left"));
+        assert_eq!(download.pct(), 51);
+    }
 }

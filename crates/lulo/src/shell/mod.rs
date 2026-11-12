@@ -1,5 +1,7 @@
 //! Window frame: title bar, navigation and instances on the left, the current page on the right.
 
+#[path = "downloads.view.rs"]
+mod downloads;
 #[path = "sidebar.view.rs"]
 mod sidebar;
 #[path = "topbar.view.rs"]
@@ -33,8 +35,8 @@ pub struct Shell {
     account: Option<Account>,
     /// Newest Steam build id per branch name; empty until the first check succeeds.
     latest: HashMap<SharedString, u32>,
-    /// Installs in progress by instance id: percent done and the handle that cancels it.
-    installs: HashMap<SharedString, (u8, tokio::task::AbortHandle)>,
+    /// Installs in progress by instance id.
+    installs: HashMap<SharedString, install::Download>,
     /// Games running, by instance id.
     running: HashMap<SharedString, std::process::Child>,
     /// Shows the loader under the title bar while the page's data loads.
@@ -122,7 +124,7 @@ impl Shell {
             return Status::Running;
         }
         match self.installs.get(&instance.id) {
-            Some((pct, _)) => Status::Installing(*pct),
+            Some(download) => Status::Installing(download.pct()),
             None => instance.status(self.latest(instance)),
         }
     }
@@ -156,12 +158,7 @@ impl Shell {
                 Err(err) => window.push_notification(format!("Couldn't start the game: {err}"), cx),
             },
             (Status::Installing(_), _) => {
-                let _ = shell.update(cx, |shell, cx| {
-                    if let Some((_, cancel)) = shell.installs.remove(&instance.id) {
-                        cancel.abort();
-                        shell.changed(cx);
-                    }
-                });
+                let _ = shell.update(cx, |shell, cx| shell.cancel(&instance.id, cx));
             }
             (_, None) => Self::open_account(shell, window, cx),
             (_, Some(account)) => {
@@ -221,19 +218,19 @@ impl Shell {
         }
         let id = instance.id.clone();
         let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let name = instance.name.clone();
         let cancel = install::start(account, instance, events_tx);
-        self.installs.insert(id.clone(), (0, cancel));
+        self.installs
+            .insert(id.clone(), install::Download::new(name, cancel));
         self.changed(cx);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
                 let _ = this.update(cx, |shell, cx| match event {
                     install::Event::Progress { done, total } => {
-                        let pct = (done * 100).checked_div(total).unwrap_or(0).min(99) as u8;
                         // Gone means cancelled; events already queued must not bring it back.
-                        if let Some(entry) = shell.installs.get_mut(&id)
-                            && entry.0 != pct
+                        if let Some(download) = shell.installs.get_mut(&id)
+                            && download.progress(done, total, std::time::Instant::now())
                         {
-                            entry.0 = pct;
                             shell.changed(cx);
                         }
                     }
@@ -256,6 +253,21 @@ impl Shell {
             }
         })
         .detach();
+    }
+
+    /// Installs in progress, by name so the order holds still between frames.
+    pub fn downloads(&self) -> Vec<(&SharedString, &install::Download)> {
+        let mut all: Vec<_> = self.installs.iter().collect();
+        all.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        all
+    }
+
+    /// Stops an install; what it wrote stays for the next one to reuse.
+    pub fn cancel(&mut self, id: &SharedString, cx: &mut Context<Self>) {
+        if let Some(download) = self.installs.remove(id) {
+            download.cancel();
+            self.changed(cx);
+        }
     }
 
     /// Re-reads instances from disk, keeping the current page.
@@ -365,6 +377,7 @@ impl Render for Shell {
             .text_color(cx.theme().foreground)
             .child(Topbar {
                 running: self.running(),
+                downloads: downloads::Pill::new(self, cx.entity().downgrade()),
             })
             .child(
                 div()

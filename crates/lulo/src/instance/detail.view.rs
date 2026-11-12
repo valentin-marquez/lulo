@@ -134,7 +134,8 @@ impl Detail {
                             .child(Meta::new(IconName::GitBranch, instance.branch.clone()))
                             .child(Meta::new(IconName::Clock, played))
                             .children(note.map(|text| Meta::new(IconName::Download, text))),
-                    ),
+                    )
+                    .children(super::bar(&instance.id, status, cx)),
             )
             .child(
                 Button::new("settings")

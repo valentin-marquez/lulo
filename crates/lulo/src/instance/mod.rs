@@ -15,8 +15,10 @@ pub mod store;
 
 use std::path::PathBuf;
 
-use gpui_kit::SharedString;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::progress::Progress;
+use gpui_kit::{App, IntoElement, SharedString, Styled};
 
 /// Project Zomboid's Steam app id.
 pub const APP: u32 = 108600;
@@ -79,13 +81,26 @@ impl Status {
     pub fn action(self) -> (String, IconName, bool) {
         match self {
             Status::NotInstalled => ("Install".into(), IconName::Download, true),
-            // Progress shows next to it (the status line), so the button can offer the way out.
+            // Progress shows next to it (bar and download manager), so the button offers the way out.
             Status::Installing(_) => ("Cancel".into(), IconName::Close, true),
             // Updating waits for the user's confirmation (#18); Play still works meanwhile.
             Status::Ready | Status::Outdated => ("Play".into(), IconName::Play, true),
             Status::Running => ("Stop".into(), IconName::Square, true),
         }
     }
+}
+
+/// The install's progress under its name, while it downloads.
+pub fn bar(id: &SharedString, status: Status, cx: &App) -> Option<impl IntoElement + use<>> {
+    let Status::Installing(pct) = status else {
+        return None;
+    };
+    Some(
+        Progress::new(SharedString::from(format!("progress-{id}")))
+            .value(pct as f32)
+            .color(cx.theme().primary)
+            .mt_1(),
+    )
 }
 
 /// "just now", "5 minutes ago", "yesterday", "3 weeks ago"...

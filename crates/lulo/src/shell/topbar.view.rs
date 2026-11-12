@@ -12,12 +12,14 @@ pub const HEIGHT: Pixels = px(48.);
 pub struct Topbar {
     /// Name of the game running, if any.
     pub running: Option<SharedString>,
+    pub downloads: super::downloads::Pill,
 }
 
 impl RenderOnce for Topbar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
 
+        let status = self.status(theme);
         TitleBar::new().h(HEIGHT).child(
             div()
                 .flex()
@@ -43,28 +45,39 @@ impl RenderOnce for Topbar {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .h(px(28.))
-                        .px_3()
-                        .rounded_full()
-                        .border_1()
-                        .border_color(theme.border)
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(
-                            div()
-                                .size(px(6.))
-                                .rounded_full()
-                                .bg(if self.running.is_some() {
-                                    theme.primary
-                                } else {
-                                    theme.muted_foreground
-                                }),
-                        )
-                        .child(match &self.running {
-                            Some(name) => format!("Running {name}"),
-                            None => "Nothing running".into(),
-                        }),
+                        .child(self.downloads)
+                        .child(status),
                 ),
         )
+    }
+}
+
+impl Topbar {
+    fn status(&self, theme: &gpui_kit::component::Theme) -> impl IntoElement + use<> {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(px(28.))
+            .px_3()
+            .rounded_full()
+            .border_1()
+            .border_color(theme.border)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(
+                div()
+                    .size(px(6.))
+                    .rounded_full()
+                    .bg(if self.running.is_some() {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    }),
+            )
+            .child(match &self.running {
+                Some(name) => format!("Running {name}"),
+                None => "Nothing running".into(),
+            })
     }
 }

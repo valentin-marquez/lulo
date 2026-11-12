@@ -63,7 +63,8 @@ fn row(ix: usize, instance: &Instance, shell: &Shell, cx: &mut Context<Shell>) -
                         .gap_4()
                         .child(Meta::new(IconName::GitBranch, instance.branch.clone()))
                         .child(Meta::new(IconName::Clock, played)),
-                ),
+                )
+                .children(crate::instance::bar(&instance.id, current, cx)),
         )
         .children(status.map(|text| {
             div()

@@ -43,16 +43,60 @@ pub fn command(instance: &Instance) -> io::Result<Command> {
 
 // ponytail: the game's output is dropped; the Logs tab (#16) will read it.
 pub fn start(instance: &Instance) -> io::Result<Child> {
-    let mut command = command(instance)?;
-    // Lets the Steam API find the app when the game isn't started by Steam itself.
-    std::fs::write(
-        instance.dir.join("game").join("steam_appid.txt"),
-        APP.to_string(),
-    )?;
-    command
+    // The game ships with `-Dzomboid.steam=1` and quits silently when SteamAPI_Init fails.
+    if !running(STEAM) {
+        return Err(io::Error::other(
+            "Steam isn't open. Open Steam and press Play again",
+        ));
+    }
+    command(instance)?
+        // Lets the Steam API find the app when the game isn't started by Steam itself.
+        .env("SteamAppId", APP.to_string())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
+}
+
+const STEAM: &str = if cfg!(windows) {
+    "steam.exe"
+} else if cfg!(target_os = "macos") {
+    "steam_osx"
+} else {
+    "steam"
+};
+
+/// Whether a process with this name is running.
+#[cfg(target_os = "linux")]
+fn running(name: &str) -> bool {
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    procs.flatten().any(|p| {
+        std::fs::read_to_string(p.path().join("comm")).is_ok_and(|comm| comm.trim_end() == name)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn running(name: &str) -> bool {
+    Command::new("pgrep")
+        .args(["-x", name])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+#[cfg(windows)]
+fn running(name: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {name}"), "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .is_ok_and(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .to_lowercase()
+                .contains(name)
+        })
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -89,5 +133,12 @@ mod tests {
         );
         assert_eq!(cmd.get_current_dir(), Some(dir.join("game").as_path()));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_running_processes_by_name() {
+        let me = std::fs::read_to_string("/proc/self/comm").unwrap();
+        assert!(running(me.trim_end()));
+        assert!(!running("no-such-process"));
     }
 }

@@ -98,6 +98,14 @@ pub fn set_build(dir: &Path, build: u32) -> io::Result<()> {
     write(dir, &manifest)
 }
 
+/// Records that the instance was just played.
+pub fn set_last_played(dir: &Path, at: u64) -> io::Result<()> {
+    let path = dir.join(FILE);
+    let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    manifest.last_played = Some(at);
+    write(dir, &manifest)
+}
+
 fn write(dir: &Path, manifest: &Manifest) -> io::Result<()> {
     // Write then rename, so a crash never leaves a half-written manifest.
     let tmp = dir.join(format!("{FILE}.tmp"));
@@ -153,6 +161,7 @@ mod tests {
         assert!(a.dir.join("game").is_dir() && a.dir.join("zomboid").is_dir());
 
         set_build(&a.dir, 26486631).unwrap();
+        set_last_played(&a.dir, 1_800_000_000).unwrap();
 
         let listed = list(&root);
         assert!(

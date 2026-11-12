@@ -13,7 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::account::{self, Account};
-use crate::instance::{self, Instance, Status, detail::Detail, install, store};
+use crate::instance::{self, Instance, Status, detail::Detail, install, launch, store};
 use crate::ui::Loader;
 use crate::{home, screenshots};
 use topbar::Topbar;
@@ -35,6 +35,8 @@ pub struct Shell {
     latest: HashMap<SharedString, u32>,
     /// Installs in progress: percent done by instance id.
     installs: HashMap<SharedString, u8>,
+    /// Games running, by instance id.
+    running: HashMap<SharedString, std::process::Child>,
     /// Shows the loader under the title bar while the page's data loads.
     // ponytail: listing instances is instant; installs (roadmap 5) will set it.
     loading: bool,
@@ -55,6 +57,7 @@ impl Shell {
             account: None,
             latest: HashMap::new(),
             installs: HashMap::new(),
+            running: HashMap::new(),
             instances: store::list(&root),
             root,
             page: Page::Home,
@@ -115,6 +118,9 @@ impl Shell {
     }
 
     pub fn status(&self, instance: &Instance) -> Status {
+        if self.running.contains_key(&instance.id) {
+            return Status::Running;
+        }
         match self.installs.get(&instance.id) {
             Some(pct) => Status::Installing(*pct),
             None => instance.status(self.latest(instance)),
@@ -135,19 +141,73 @@ impl Shell {
             .read_with(cx, |shell, _| shell.status(&instance))
             .unwrap_or(Status::Ready);
         match (status, account) {
-            (Status::Ready | Status::Outdated, _) => {
-                // ponytail: launching is the next roadmap issue (#15).
-                window.push_notification("Launching is not available yet.", cx);
+            (Status::Running, _) => {
+                let _ = shell.update(cx, |shell, _| {
+                    if let Some(child) = shell.running.get_mut(&instance.id) {
+                        let _ = child.kill();
+                    }
+                });
             }
+            (Status::Ready | Status::Outdated, _) => match launch::start(&instance) {
+                Ok(child) => {
+                    let _ = shell.update(cx, |shell, cx| shell.watch(instance, child, cx));
+                }
+                Err(err) => window.push_notification(format!("Couldn't start the game: {err}"), cx),
+            },
             (Status::Installing(_), _) => {}
             (_, None) => Self::open_account(shell, window, cx),
             (_, Some(account)) => {
-                let _ = shell.update(cx, |shell, cx| shell.install(instance, account, cx));
+                let handle = window.window_handle();
+                let _ = shell.update(cx, |shell, cx| shell.install(instance, account, handle, cx));
             }
         }
     }
 
-    fn install(&mut self, instance: Instance, account: Account, cx: &mut Context<Self>) {
+    /// Tracks a running game until it exits, then records the play time.
+    fn watch(&mut self, instance: Instance, child: std::process::Child, cx: &mut Context<Self>) {
+        let id = instance.id.clone();
+        self.running.insert(id.clone(), child);
+        self.changed(cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let exited = this
+                    .update(cx, |shell, _| match shell.running.get_mut(&id) {
+                        Some(child) => !matches!(child.try_wait(), Ok(None)),
+                        None => true,
+                    })
+                    .unwrap_or(true);
+                if exited {
+                    break;
+                }
+            }
+            let _ = store::set_last_played(&instance.dir, store::now());
+            let _ = this.update(cx, |shell, cx| {
+                shell.running.remove(&id);
+                shell.reload(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Name of a running game, for the title bar.
+    pub fn running(&self) -> Option<SharedString> {
+        let id = self.running.keys().next()?;
+        self.instances
+            .iter()
+            .find(|i| &i.id == id)
+            .map(|i| i.name.clone())
+    }
+
+    fn install(
+        &mut self,
+        instance: Instance,
+        account: Account,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         if self.installs.contains_key(&instance.id) {
             return;
         }
@@ -172,12 +232,11 @@ impl Shell {
                     install::Event::Failed(err) => {
                         shell.installs.remove(&id);
                         shell.changed(cx);
-                        if let Some(window) = cx.active_window() {
-                            let _ = window.update(cx, |_, window, cx| {
-                                use gpui_kit::component::WindowExt;
-                                window.push_notification(format!("Install failed: {err}"), cx);
-                            });
-                        }
+                        // The window that started the install, not whichever has focus now.
+                        let _ = window.update(cx, |_, window, cx| {
+                            use gpui_kit::component::WindowExt;
+                            window.push_notification(format!("Install failed: {err}"), cx);
+                        });
                     }
                 });
             }
@@ -290,7 +349,9 @@ impl Render for Shell {
             .size_full()
             .bg(cx.theme().title_bar)
             .text_color(cx.theme().foreground)
-            .child(Topbar)
+            .child(Topbar {
+                running: self.running(),
+            })
             .child(
                 div()
                     .flex()

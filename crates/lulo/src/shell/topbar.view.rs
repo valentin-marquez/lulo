@@ -9,7 +9,10 @@ use crate::assets::LOGO;
 pub const HEIGHT: Pixels = px(48.);
 
 #[derive(IntoElement)]
-pub struct Topbar;
+pub struct Topbar {
+    /// Name of the game running, if any.
+    pub running: Option<SharedString>,
+}
 
 impl RenderOnce for Topbar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -35,7 +38,6 @@ impl RenderOnce for Topbar {
                                 .child("lulo"),
                         ),
                 )
-                // ponytail: static until launching exists (roadmap step 6).
                 .child(
                     div()
                         .flex()
@@ -48,8 +50,20 @@ impl RenderOnce for Topbar {
                         .border_color(theme.border)
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(div().size(px(6.)).rounded_full().bg(theme.muted_foreground))
-                        .child("Nothing running"),
+                        .child(
+                            div()
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(if self.running.is_some() {
+                                    theme.primary
+                                } else {
+                                    theme.muted_foreground
+                                }),
+                        )
+                        .child(match &self.running {
+                            Some(name) => format!("Running {name}"),
+                            None => "Nothing running".into(),
+                        }),
                 ),
         )
     }

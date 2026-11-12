@@ -55,6 +55,9 @@ pub fn open(
 
 struct Login {
     done: Done,
+    /// The window the dialog lives in. Finishing a login must not depend on which window has
+    /// focus: the user is usually on their phone when the QR login completes.
+    window: AnyWindowHandle,
     mode: Mode,
     state: State,
     account: Entity<InputState>,
@@ -69,6 +72,7 @@ impl Login {
     fn new(done: Done, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             done,
+            window: window.window_handle(),
             mode: Mode::Qr,
             state: State::Starting,
             account: cx.new(|cx| InputState::new(window, cx).placeholder("Account name")),
@@ -118,22 +122,18 @@ impl Login {
             Event::Waiting(text) => State::Waiting(text),
             Event::Failed(err) => State::Failed(err),
             Event::Done(account) => {
-                let done = self.done.clone();
+                let (done, handle) = (self.done.clone(), self.window);
                 cx.spawn(async move |_, cx| {
                     let saved = super::save(&account).await;
-                    cx.update(|cx| {
-                        if let Some(window) = cx.active_window() {
-                            let _ = window.update(cx, |_, window, cx| {
-                                if let Err(err) = saved {
-                                    window.push_notification(
-                                        format!("Signed in, but the login couldn't be saved in the system keyring: {err}"),
-                                        cx,
-                                    );
-                                }
-                                window.close_dialog(cx);
-                                done(account, window, cx);
-                            });
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Err(err) = saved {
+                            window.push_notification(
+                                format!("Signed in for this session, but the login couldn't be saved in the system keyring: {err}"),
+                                cx,
+                            );
                         }
+                        window.close_dialog(cx);
+                        done(account, window, cx);
                     });
                 })
                 .detach();

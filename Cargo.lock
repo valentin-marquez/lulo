@@ -6422,6 +6422,7 @@ dependencies = [
  "futures-util",
  "lzma-rs",
  "prost",
+ "qrcode",
  "reqwest",
  "rsa",
  "rustls",

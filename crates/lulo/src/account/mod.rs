@@ -160,3 +160,28 @@ async fn login(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Writes and deletes a throwaway entry (not the real account) to see whether the OS keyring
+    /// answers. Run with `cargo test -p lulo keyring -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "talks to the OS keyring"]
+    fn keyring_answers() {
+        let started = std::time::Instant::now();
+        let waiter = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = waiter.block_on(super::runtime::blocking(|| {
+            let entry =
+                keyring::Entry::new("lulo-diagnostic", "probe").map_err(|e| e.to_string())?;
+            entry
+                .set_password("not-a-secret")
+                .map_err(|e| e.to_string())?;
+            entry.delete_credential().map_err(|e| e.to_string())
+        }));
+        println!("keyring round trip: {result:?} in {:?}", started.elapsed());
+        assert!(matches!(result, Ok(Ok(()))));
+    }
+}

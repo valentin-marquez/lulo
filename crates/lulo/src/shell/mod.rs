@@ -5,6 +5,7 @@ mod sidebar;
 #[path = "topbar.view.rs"]
 mod topbar;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui_kit::component::ActiveTheme;
@@ -30,6 +31,8 @@ pub struct Shell {
     page: Page,
     detail: Option<Entity<Detail>>,
     account: Option<Account>,
+    /// Newest Steam build id per branch name; empty until the first check succeeds.
+    latest: HashMap<SharedString, u32>,
     /// Shows the loader under the title bar while the page's data loads.
     // ponytail: listing instances is instant; installs (roadmap 5) will set it.
     loading: bool,
@@ -46,14 +49,45 @@ impl Shell {
             });
         })
         .detach();
-        Self {
+        let mut shell = Self {
             account: None,
+            latest: HashMap::new(),
             instances: store::list(&root),
             root,
             page: Page::Home,
             detail: None,
             loading: false,
-        }
+        };
+        shell.check_builds(cx);
+        shell
+    }
+
+    /// Newest build of the instance's branch, when it is known.
+    pub fn latest(&self, instance: &Instance) -> Option<u32> {
+        self.latest.get(&instance.branch).copied()
+    }
+
+    /// Asks Steam anonymously for each branch's build; offline just leaves the marks as they were.
+    fn check_builds(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let Ok(branches) = instance::branches::fetch().await else {
+                return;
+            };
+            let _ = this.update(cx, |shell, cx| {
+                shell.latest = branches
+                    .into_iter()
+                    .map(|b| (SharedString::from(b.name), b.build_id))
+                    .collect();
+                if let (Page::Instance(ix), Some(detail)) = (shell.page, &shell.detail)
+                    && let Some(instance) = shell.instances.get(ix).cloned()
+                {
+                    let latest = shell.latest(&instance);
+                    detail.update(cx, |d, cx| d.show(instance, latest, cx));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn instances(&self) -> &[Instance] {
@@ -65,10 +99,12 @@ impl Shell {
             let Some(instance) = self.instances.get(ix).cloned() else {
                 return;
             };
+            let latest = self.latest(&instance);
             match &self.detail {
-                Some(detail) => detail.update(cx, |d, cx| d.show(instance, cx)),
-                None => self.detail = Some(cx.new(|_| Detail::new(instance))),
+                Some(detail) => detail.update(cx, |d, cx| d.show(instance, latest, cx)),
+                None => self.detail = Some(cx.new(|_| Detail::new(instance, latest))),
             }
+            self.check_builds(cx);
         }
         self.page = page;
         cx.notify();

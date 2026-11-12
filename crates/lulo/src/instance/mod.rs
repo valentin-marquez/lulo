@@ -27,19 +27,21 @@ pub struct Instance {
     pub last_played: Option<u64>,
 }
 
-// ponytail: Outdated and Downloading come back with installs (roadmap 5) and updates (9).
+// ponytail: Downloading comes back with installs (roadmap 5).
 #[derive(Clone, Copy, PartialEq)]
 pub enum Status {
     NotInstalled,
     Ready,
+    Outdated,
 }
 
 impl Instance {
-    pub fn status(&self) -> Status {
-        if self.build.is_some() {
-            Status::Ready
-        } else {
-            Status::NotInstalled
+    /// `latest` is the branch's newest build id, when known; without it an install is `Ready`.
+    pub fn status(&self, latest: Option<u32>) -> Status {
+        match (self.build, latest) {
+            (None, _) => Status::NotInstalled,
+            (Some(have), Some(newest)) if have != newest => Status::Outdated,
+            _ => Status::Ready,
         }
     }
 
@@ -56,6 +58,7 @@ impl Status {
         match self {
             Status::NotInstalled => "Not installed",
             Status::Ready => "Ready",
+            Status::Outdated => "Update available",
         }
     }
 }
@@ -87,7 +90,26 @@ fn ago(secs: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ago;
+    use super::{Instance, Status, ago};
+
+    fn installed(build: Option<u32>) -> Instance {
+        Instance {
+            id: "a".into(),
+            dir: Default::default(),
+            name: "A".into(),
+            branch: "public".into(),
+            build,
+            last_played: None,
+        }
+    }
+
+    #[test]
+    fn marks_outdated_only_when_installed_and_behind() {
+        assert!(installed(None).status(Some(2)) == Status::NotInstalled);
+        assert!(installed(Some(2)).status(Some(2)) == Status::Ready);
+        assert!(installed(Some(1)).status(Some(2)) == Status::Outdated);
+        assert!(installed(Some(1)).status(None) == Status::Ready);
+    }
 
     #[test]
     fn says_how_long_ago() {

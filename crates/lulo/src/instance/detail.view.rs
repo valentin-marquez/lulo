@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::Instance;
+use super::{Instance, Status};
 use crate::ui::{Empty, FancyButton, Meta};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -51,19 +51,22 @@ impl Tab {
 
 pub struct Detail {
     instance: Instance,
+    latest: Option<u32>,
     tab: Tab,
 }
 
 impl Detail {
-    pub fn new(instance: Instance) -> Self {
+    pub fn new(instance: Instance, latest: Option<u32>) -> Self {
         Self {
             instance,
+            latest,
             tab: Tab::Mods,
         }
     }
 
-    pub fn show(&mut self, instance: Instance, cx: &mut Context<Self>) {
+    pub fn show(&mut self, instance: Instance, latest: Option<u32>, cx: &mut Context<Self>) {
         self.instance = instance;
+        self.latest = latest;
         cx.notify();
     }
 
@@ -71,6 +74,12 @@ impl Detail {
         let theme = cx.theme();
         let instance = &self.instance;
         let played = instance.played();
+        let outdated = match (instance.status(self.latest), instance.build, self.latest) {
+            (Status::Outdated, Some(have), Some(newest)) => {
+                Some(format!("Update available: build {have}, newest {newest}"))
+            }
+            _ => None,
+        };
 
         div()
             .flex()
@@ -108,7 +117,8 @@ impl Detail {
                             .flex()
                             .gap_4()
                             .child(Meta::new(IconName::GitBranch, instance.branch.clone()))
-                            .child(Meta::new(IconName::Clock, played)),
+                            .child(Meta::new(IconName::Clock, played))
+                            .children(outdated.map(|text| Meta::new(IconName::Download, text))),
                     ),
             )
             .child(

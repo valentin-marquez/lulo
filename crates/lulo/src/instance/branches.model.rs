@@ -1,17 +1,21 @@
 //! Project Zomboid's Steam branches (the game versions an instance can pin), fetched live.
 //!
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 pub use steam::pics::Branch;
 
 const PROJECT_ZOMBOID: u32 = 108600;
 
-/// Branches change a few times a month; one fetch per session is enough.
-static CACHE: Mutex<Option<Vec<Branch>>> = Mutex::new(None);
+/// Opening an instance asks again, so the cache only spares repeated fetches within minutes.
+const TTL: Duration = Duration::from_secs(600);
+static CACHE: Mutex<Option<(Instant, Vec<Branch>)>> = Mutex::new(None);
 
 /// Branches that can be installed (password-protected ones are left out).
 pub async fn fetch() -> Result<Vec<Branch>, String> {
-    if let Some(cached) = CACHE.lock().expect("cache lock").clone() {
+    if let Some((at, cached)) = CACHE.lock().expect("cache lock").clone()
+        && at.elapsed() < TTL
+    {
         return Ok(cached);
     }
     let branches = crate::runtime::spawn(async {
@@ -27,7 +31,7 @@ pub async fn fetch() -> Result<Vec<Branch>, String> {
         .into_iter()
         .filter(|b| !b.password_required)
         .collect();
-    *CACHE.lock().expect("cache lock") = Some(usable.clone());
+    *CACHE.lock().expect("cache lock") = Some((Instant::now(), usable.clone()));
     Ok(usable)
 }
 

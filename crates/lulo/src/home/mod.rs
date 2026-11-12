@@ -10,12 +10,17 @@ use crate::instance::{Instance, Status};
 use crate::shell::{Page, Shell};
 use crate::ui::{Empty, FancyButton, Meta};
 
-fn row(ix: usize, instance: &Instance, cx: &mut Context<Shell>) -> Stateful<Div> {
+fn row(
+    ix: usize,
+    instance: &Instance,
+    latest: Option<u32>,
+    cx: &mut Context<Shell>,
+) -> Stateful<Div> {
     let theme = cx.theme();
     let played = instance.played();
-    let status = match instance.status() {
+    let status = match instance.status(latest) {
         Status::Ready => None,
-        Status::NotInstalled => Some(Status::NotInstalled.label()),
+        other => Some(other.label()),
     };
     let dir = instance.dir.clone();
 
@@ -94,7 +99,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
     let handle = cx.entity().downgrade();
     let mut rows = Vec::new();
     for (ix, instance) in shell.instances().iter().enumerate() {
-        rows.push(row(ix, instance, cx));
+        rows.push(row(ix, instance, shell.latest(instance), cx));
     }
     let theme = cx.theme();
 

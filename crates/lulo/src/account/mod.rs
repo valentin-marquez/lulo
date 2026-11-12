@@ -1,4 +1,5 @@
-//! The signed-in Steam account: login flow and the refresh token kept in the OS keyring.
+//! The signed-in Steam account: login flow and the refresh token kept in the OS keyring
+//! (or a private file when there is none).
 
 #[path = "login.view.rs"]
 pub mod login;
@@ -37,27 +38,80 @@ fn entry() -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, ENTRY).map_err(|err| err.to_string())
 }
 
-/// The account saved in the keyring, unless missing or its token has expired.
+/// Where the login goes when there is no OS keyring (Linux without a Secret Service, common
+/// on tiling window managers): a file only this user can read, next to the instances.
+fn file() -> std::path::PathBuf {
+    crate::instance::store::root().with_file_name("account.json")
+}
+
+/// The saved account, unless missing or its token has expired.
 pub async fn load() -> Option<Account> {
-    let text = runtime::blocking(|| entry()?.get_password().map_err(|e| e.to_string()))
-        .await
-        .ok()?
-        .ok()?;
+    let text = runtime::blocking(|| {
+        entry()
+            .and_then(|e| e.get_password().map_err(|e| e.to_string()))
+            .or_else(|_| std::fs::read_to_string(file()).map_err(|e| e.to_string()))
+    })
+    .await
+    .ok()?
+    .ok()?;
     let account: Account = serde_json::from_str(&text).ok()?;
     let alive =
         auth::expiry(&account.refresh_token).is_none_or(|exp| exp > crate::instance::store::now());
     alive.then_some(account)
 }
 
-pub async fn save(account: &Account) -> Result<(), String> {
+/// Saves the account in the OS keyring, or in the private file when there is none.
+/// Returns whether it went to the file.
+pub async fn save(account: &Account) -> Result<bool, String> {
     let text = serde_json::to_string(account).map_err(|e| e.to_string())?;
-    runtime::blocking(move || entry()?.set_password(&text).map_err(|e| e.to_string())).await?
+    runtime::blocking(move || {
+        if entry()
+            .and_then(|e| e.set_password(&text).map_err(|e| e.to_string()))
+            .is_ok()
+        {
+            // A login saved before the keyring was set up must not outlive this one.
+            let _ = std::fs::remove_file(file());
+            return Ok(false);
+        }
+        write_private(&file(), &text)
+            .map(|()| true)
+            .map_err(|e| e.to_string())
+    })
+    .await?
+}
+
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        // `mode` only applies when the file is created; an older file may be wider.
+        if path.exists() {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    options.open(path)?.write_all(text.as_bytes())
 }
 
 pub async fn forget() -> Result<(), String> {
-    runtime::blocking(|| match entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(err) => Err(err.to_string()),
+    runtime::blocking(|| {
+        match std::fs::remove_file(file()) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.to_string()),
+        }
+        match entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            // Nothing can be stored there, so nothing is left to delete.
+            Err(keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
     })
     .await?
 }
@@ -183,5 +237,24 @@ mod tests {
         }));
         println!("keyring round trip: {result:?} in {:?}", started.elapsed());
         assert!(matches!(result, Ok(Ok(()))));
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    #[cfg(unix)]
+    #[test]
+    fn private_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir()
+            .join(format!("lulo-account-{}", std::process::id()))
+            .join("account.json");
+        super::write_private(&path, "a").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::write_private(&path, "b").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "b");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

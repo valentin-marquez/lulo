@@ -126,11 +126,13 @@ impl Login {
                 cx.spawn(async move |_, cx| {
                     let saved = super::save(&account).await;
                     let _ = handle.update(cx, |_, window, cx| {
-                        if let Err(err) = saved {
-                            window.push_notification(
-                                format!("Signed in for this session, but the login couldn't be saved in the system keyring: {err}"),
-                                cx,
-                            );
+                        let note = match saved {
+                            Ok(false) => None,
+                            Ok(true) => Some("No system keyring found, so your login is saved in a file only your user can read".to_owned()),
+                            Err(err) => Some(format!("Signed in, but lulo couldn't remember it for next time: {err}")),
+                        };
+                        if let Some(note) = note {
+                            window.push_notification(note, cx);
                         }
                         window.close_dialog(cx);
                         done(account, window, cx);

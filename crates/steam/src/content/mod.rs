@@ -91,9 +91,10 @@ pub async fn manifest(
 const PARALLEL: usize = 16;
 
 /// Writes every file of `manifest` under `dir`, verifying each chunk and each whole file.
-/// `progress` receives the bytes written so far.
-// ponytail: no resume, and every chunk is downloaded; reusing chunks already on disk (updates
-// between builds) comes with the updates step of the roadmap.
+/// Files already on disk with the right size and SHA-1 are kept, so an interrupted install
+/// resumes. `progress` receives the bytes done so far, kept files included.
+// ponytail: a file that changed is downloaded whole; reusing its unchanged chunks (updates
+// between builds) is #24.
 pub async fn install(
     http: &reqwest::Client,
     host: &str,
@@ -122,12 +123,25 @@ pub async fn install(
         }
     }
 
+    let mut kept = vec![false; manifest.files.len()];
+    let mut done = 0;
+    for (ix, file) in manifest.files.iter().enumerate() {
+        if !file.is_dir && !file.chunks.is_empty() && verified(target(dir, &file.path)?, file).await
+        {
+            kept[ix] = true;
+            done += file.size;
+        }
+    }
+    if done > 0 {
+        progress(done);
+    }
+
     // Owned jobs and a plain async fn keep the stream `Send`, so installs can be spawned.
     let jobs: Vec<(usize, manifest::Chunk)> = manifest
         .files
         .iter()
         .enumerate()
-        .filter(|(_, f)| !f.is_dir)
+        .filter(|(ix, f)| !f.is_dir && !kept[*ix])
         .flat_map(|(ix, f)| f.chunks.iter().cloned().map(move |c| (ix, c)))
         .collect();
     let mut chunks = stream::iter(jobs)
@@ -135,7 +149,6 @@ pub async fn install(
         .buffered(PARALLEL);
 
     let mut open: Option<Open> = None;
-    let mut done = 0;
     while let Some(next) = chunks.next().await {
         let (ix, c, plain) = next?;
         if open.as_ref().is_none_or(|o| o.ix != ix) {
@@ -169,6 +182,23 @@ pub async fn install(
         last.finish(manifest).await?;
     }
     Ok(())
+}
+
+/// Whether `path` already holds `file`: same size and SHA-1.
+async fn verified(path: std::path::PathBuf, file: &manifest::File) -> bool {
+    let (size, sha) = (file.size, file.sha.clone());
+    tokio::task::spawn_blocking(move || {
+        if std::fs::metadata(&path).map(|m| m.len()).ok() != Some(size) {
+            return false;
+        }
+        let mut hash = Sha1::new();
+        std::fs::File::open(&path)
+            .and_then(|mut f| std::io::copy(&mut f, &mut hash))
+            .is_ok()
+            && hash.finalize().as_slice() == sha.as_slice()
+    })
+    .await
+    .unwrap_or(false)
 }
 
 async fn fetch(
@@ -231,4 +261,36 @@ async fn executable(path: &Path) -> Result<()> {
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(body: &[u8]) -> manifest::File {
+        manifest::File {
+            path: "f".into(),
+            size: body.len() as u64,
+            is_dir: false,
+            sha: Sha1::digest(body).to_vec(),
+            chunks: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn keeps_only_files_that_match() {
+        let dir = std::env::temp_dir().join(format!("steam-verified-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f");
+        std::fs::write(&path, b"abc").unwrap();
+
+        assert!(verified(path.clone(), &file(b"abc")).await);
+        assert!(
+            !verified(path.clone(), &file(b"abd")).await,
+            "same size, other bytes"
+        );
+        assert!(!verified(path.clone(), &file(b"ab")).await, "other size");
+        assert!(!verified(dir.join("missing"), &file(b"abc")).await);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

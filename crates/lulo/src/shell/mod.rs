@@ -33,8 +33,8 @@ pub struct Shell {
     account: Option<Account>,
     /// Newest Steam build id per branch name; empty until the first check succeeds.
     latest: HashMap<SharedString, u32>,
-    /// Installs in progress: percent done by instance id.
-    installs: HashMap<SharedString, u8>,
+    /// Installs in progress by instance id: percent done and the handle that cancels it.
+    installs: HashMap<SharedString, (u8, tokio::task::AbortHandle)>,
     /// Games running, by instance id.
     running: HashMap<SharedString, std::process::Child>,
     /// Shows the loader under the title bar while the page's data loads.
@@ -122,12 +122,13 @@ impl Shell {
             return Status::Running;
         }
         match self.installs.get(&instance.id) {
-            Some(pct) => Status::Installing(*pct),
+            Some((pct, _)) => Status::Installing(*pct),
             None => instance.status(self.latest(instance)),
         }
     }
 
-    /// The main button of an instance: install it if needed, else launch it.
+    /// The main button of an instance: install it if needed, else launch it; stops whatever
+    /// it is doing (a running game, an install).
     pub fn play(shell: WeakEntity<Shell>, id: SharedString, window: &mut Window, cx: &mut App) {
         let Ok((instance, account)) = shell.read_with(cx, |shell, _| {
             let instance = shell.instances.iter().find(|i| i.id == id).cloned();
@@ -154,7 +155,14 @@ impl Shell {
                 }
                 Err(err) => window.push_notification(format!("Couldn't start the game: {err}"), cx),
             },
-            (Status::Installing(_), _) => {}
+            (Status::Installing(_), _) => {
+                let _ = shell.update(cx, |shell, cx| {
+                    if let Some((_, cancel)) = shell.installs.remove(&instance.id) {
+                        cancel.abort();
+                        shell.changed(cx);
+                    }
+                });
+            }
             (_, None) => Self::open_account(shell, window, cx),
             (_, Some(account)) => {
                 let handle = window.window_handle();
@@ -212,16 +220,20 @@ impl Shell {
             return;
         }
         let id = instance.id.clone();
-        self.installs.insert(id.clone(), 0);
-        self.changed(cx);
         let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
-        install::start(account, instance, events_tx);
+        let cancel = install::start(account, instance, events_tx);
+        self.installs.insert(id.clone(), (0, cancel));
+        self.changed(cx);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
                 let _ = this.update(cx, |shell, cx| match event {
                     install::Event::Progress { done, total } => {
                         let pct = (done * 100).checked_div(total).unwrap_or(0).min(99) as u8;
-                        if shell.installs.insert(id.clone(), pct) != Some(pct) {
+                        // Gone means cancelled; events already queued must not bring it back.
+                        if let Some(entry) = shell.installs.get_mut(&id)
+                            && entry.0 != pct
+                        {
+                            entry.0 = pct;
                             shell.changed(cx);
                         }
                     }
@@ -230,7 +242,9 @@ impl Shell {
                         shell.reload(cx);
                     }
                     install::Event::Failed(err) => {
-                        shell.installs.remove(&id);
+                        if shell.installs.remove(&id).is_none() {
+                            return;
+                        }
                         shell.changed(cx);
                         // The window that started the install, not whichever has focus now.
                         let _ = window.update(cx, |_, window, cx| {

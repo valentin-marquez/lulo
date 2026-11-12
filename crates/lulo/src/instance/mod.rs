@@ -79,7 +79,8 @@ impl Status {
     pub fn action(self) -> (String, IconName, bool) {
         match self {
             Status::NotInstalled => ("Install".into(), IconName::Download, true),
-            Status::Installing(pct) => (format!("Installing {pct}%"), IconName::Download, false),
+            // Progress shows next to it (the status line), so the button can offer the way out.
+            Status::Installing(_) => ("Cancel".into(), IconName::Close, true),
             // Updating waits for the user's confirmation (#18); Play still works meanwhile.
             Status::Ready | Status::Outdated => ("Play".into(), IconName::Play, true),
             Status::Running => ("Stop".into(), IconName::Square, true),

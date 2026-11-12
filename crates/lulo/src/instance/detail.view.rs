@@ -82,7 +82,14 @@ impl Detail {
             .shell
             .upgrade()
             .and_then(|shell| shell.read(cx).latest(instance));
-        let outdated = match (instance.status(latest), instance.build, latest) {
+        let status = self
+            .shell
+            .upgrade()
+            .map_or(instance.status(latest), |shell| {
+                shell.read(cx).status(instance)
+            });
+        let note = match (status, instance.build, latest) {
+            (Status::Installing(_), _, _) => Some(status.label()),
             (Status::Outdated, Some(have), Some(newest)) => {
                 Some(format!("Update available: build {have}, newest {newest}"))
             }
@@ -126,7 +133,7 @@ impl Detail {
                             .gap_4()
                             .child(Meta::new(IconName::GitBranch, instance.branch.clone()))
                             .child(Meta::new(IconName::Clock, played))
-                            .children(outdated.map(|text| Meta::new(IconName::Download, text))),
+                            .children(note.map(|text| Meta::new(IconName::Download, text))),
                     ),
             )
             .child(
@@ -138,12 +145,6 @@ impl Detail {
                     .rounded(px(10.)),
             )
             .child({
-                let status = self
-                    .shell
-                    .upgrade()
-                    .map_or(instance.status(latest), |shell| {
-                        shell.read(cx).status(instance)
-                    });
                 let (label, icon, enabled) = status.action();
                 let (shell, id) = (self.shell.clone(), instance.id.clone());
                 FancyButton::new("play", label)

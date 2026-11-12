@@ -26,8 +26,13 @@ fn os() -> &'static str {
     }
 }
 
-/// Runs the install on the background runtime, reporting through `events`.
-pub fn start(account: Account, instance: Instance, events: UnboundedSender<Event>) {
+/// Runs the install on the background runtime, reporting through `events`. Aborting the
+/// returned handle cancels it; the files written so far are kept for the next install to reuse.
+pub fn start(
+    account: Account,
+    instance: Instance,
+    events: UnboundedSender<Event>,
+) -> tokio::task::AbortHandle {
     runtime::spawn(async move {
         let event = match install(&account, &instance, &events).await {
             Ok(build) => match store::set_build(&instance.dir, build) {
@@ -37,10 +42,10 @@ pub fn start(account: Account, instance: Instance, events: UnboundedSender<Event
             Err(err) => Event::Failed(err),
         };
         let _ = events.send(event);
-    });
+    })
+    .abort_handle()
 }
 
-// ponytail: no cancel or resume; an interrupted install starts over (it overwrites the files).
 async fn install(
     account: &Account,
     instance: &Instance,

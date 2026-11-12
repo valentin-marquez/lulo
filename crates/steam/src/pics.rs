@@ -3,9 +3,8 @@
 use crate::cm::packet::emsg;
 use crate::keyvalues::{self, Map};
 use crate::proto::{
-    CMsgClientPicsAccessTokenRequest, CMsgClientPicsAccessTokenResponse,
+    AppRequest, CMsgClientPicsAccessTokenRequest, CMsgClientPicsAccessTokenResponse,
     CMsgClientPicsProductInfoRequest, CMsgClientPicsProductInfoResponse,
-    c_msg_client_pics_product_info_request::AppInfo as AppRequest,
 };
 use crate::{Client, Error, Result};
 
@@ -21,7 +20,6 @@ pub async fn app_info(client: &mut Client, http: &reqwest::Client, appid: u32) -
             emsg::CLIENT_PICS_ACCESS_TOKEN_RESPONSE,
             &CMsgClientPicsAccessTokenRequest {
                 appids: vec![appid],
-                ..Default::default()
             },
         )
         .await?;
@@ -35,10 +33,8 @@ pub async fn app_info(client: &mut Client, http: &reqwest::Client, appid: u32) -
         apps: vec![AppRequest {
             appid: Some(appid),
             access_token: token,
-            ..Default::default()
         }],
         single_response: Some(true),
-        ..Default::default()
     };
     let response: CMsgClientPicsProductInfoResponse = client
         .request_until(

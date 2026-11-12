@@ -10,10 +10,7 @@ pub mod keyvalues;
 pub mod pics;
 pub mod workshop;
 
-#[allow(clippy::all, missing_docs)]
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/_.rs"));
-}
+pub mod proto;
 
 pub use cm::Client;
 /// Re-exported so callers can name the HTTP client type `steam::http()` returns.

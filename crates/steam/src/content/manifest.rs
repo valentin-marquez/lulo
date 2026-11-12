@@ -175,7 +175,7 @@ mod tests {
 
     use super::*;
     use crate::content::crypto::tests::encrypt;
-    use crate::proto::content_manifest_payload::{FileMapping, file_mapping::ChunkData};
+    use crate::proto::{ChunkData, FileMapping};
 
     fn section(out: &mut Vec<u8>, magic: u32, body: &impl Message) {
         let body = body.encode_to_vec();
@@ -218,7 +218,6 @@ mod tests {
             depot_id: Some(108600),
             gid_manifest: Some(42),
             filenames_encrypted: Some(true),
-            ..Default::default()
         };
         let mut z = Vec::new();
         section(&mut z, PAYLOAD, &payload);

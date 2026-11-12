@@ -98,7 +98,6 @@ fn device() -> CAuthenticationDeviceDetails {
         device_friendly_name: Some(DEVICE_NAME.into()),
         platform_type: Some(PLATFORM),
         os_type: Some(OS),
-        ..Default::default()
     }
 }
 
@@ -108,7 +107,6 @@ pub async fn qr(client: &mut Client) -> Result<Session> {
         device_friendly_name: Some(DEVICE_NAME.into()),
         platform_type: Some(PLATFORM),
         device_details: Some(device()),
-        ..Default::default()
     };
     let reply: CAuthenticationBeginAuthSessionViaQrResponse = client
         .call_unauthed("Authentication.BeginAuthSessionViaQR", &request)
@@ -155,7 +153,6 @@ pub async fn password(
         website_id: Some("Client".into()),
         device_details: Some(device()),
         guard_data: guard_data.map(str::to_owned),
-        ..Default::default()
     };
     let reply: CAuthenticationBeginAuthSessionViaCredentialsResponse = client
         .call_unauthed("Authentication.BeginAuthSessionViaCredentials", &request)
@@ -224,7 +221,6 @@ pub async fn poll(client: &mut Client, session: &mut Session) -> Result<Poll> {
             &CAuthenticationPollAuthSessionStatusRequest {
                 client_id: Some(session.client_id),
                 request_id: Some(session.request_id.clone()),
-                ..Default::default()
             },
         )
         .await?;
@@ -310,7 +306,6 @@ mod tests {
         assert_eq!(Confirmation::DeviceConfirmation.code_type(), None);
         let raw = CAuthenticationAllowedConfirmation {
             confirmation_type: Some(4),
-            ..Default::default()
         };
         assert_eq!(Confirmation::from(&raw), Confirmation::DeviceConfirmation);
     }

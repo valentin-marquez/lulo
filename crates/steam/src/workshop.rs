@@ -22,7 +22,6 @@ pub struct Item {
 pub async fn details(client: &mut Client, ids: &[u64]) -> Result<Vec<Item>> {
     let request = CPublishedFileGetDetailsRequest {
         publishedfileids: ids.to_vec(),
-        ..Default::default()
     };
     let reply: CPublishedFileGetDetailsResponse =
         client.call("PublishedFile.GetDetails", &request).await?;

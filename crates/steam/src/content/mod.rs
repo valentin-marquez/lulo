@@ -47,7 +47,6 @@ pub async fn depot_key(client: &mut Client, app: u32, depot: u32) -> Result<Key>
 pub async fn cdn_host(client: &mut Client) -> Result<String> {
     let request = CContentServerDirectoryGetServersForSteamPipeRequest {
         cell_id: Some(client.cell_id),
-        ..Default::default()
     };
     let reply: CContentServerDirectoryGetServersForSteamPipeResponse = client
         .call("ContentServerDirectory.GetServersForSteamPipe", &request)
@@ -75,7 +74,6 @@ pub async fn manifest(
         depot_id: Some(depot),
         manifest_id: Some(id),
         app_branch: Some(branch.to_owned()),
-        ..Default::default()
     };
     // The code expires within minutes, so fetch it right before the download.
     let code: CContentServerDirectoryGetManifestRequestCodeResponse = client

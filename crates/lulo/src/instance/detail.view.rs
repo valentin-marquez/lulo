@@ -28,7 +28,7 @@ impl Tab {
         }
     }
 
-    // ponytail: empty states until step 7 of the roadmap fills the tabs.
+    // ponytail: empty states until #16 fills the Mods and Worlds tabs.
     fn empty(self) -> (IconName, &'static str, &'static str) {
         match self {
             Tab::Mods => (
@@ -54,6 +54,8 @@ pub struct Detail {
     instance: Instance,
     tab: Tab,
     shell: WeakEntity<Shell>,
+    /// Made on first view; it needs a window for its search field.
+    logs: Option<Entity<super::logs_view::Logs>>,
 }
 
 impl Detail {
@@ -62,6 +64,7 @@ impl Detail {
             instance,
             tab: Tab::Mods,
             shell,
+            logs: None,
         }
     }
 
@@ -70,6 +73,9 @@ impl Detail {
     }
 
     pub fn show(&mut self, instance: Instance, cx: &mut Context<Self>) {
+        if instance.id != self.instance.id {
+            self.logs = None;
+        }
         self.instance = instance;
         cx.notify();
     }
@@ -173,43 +179,39 @@ impl Detail {
             })
     }
 
+    /// Mods, Worlds, Logs: the underline slides between them on a spring (gpui-component's
+    /// TabBar measures each tab and keeps the indicator interruptible).
     fn tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        div()
-            .flex()
-            .gap_1()
-            .border_b_1()
-            .border_color(theme.border)
-            .children(Tab::ALL.map(|tab| {
-                let active = tab == self.tab;
-                div()
-                    .id(tab.label())
-                    .px_3()
-                    .py_2()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .map(|this| {
-                        if active {
-                            this.text_color(theme.foreground)
-                                .border_b_2()
-                                .border_color(theme.primary)
-                        } else {
-                            this.text_color(theme.muted_foreground)
-                                .hover(|s| s.text_color(theme.foreground))
-                        }
-                    })
-                    .child(tab.label())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tab = tab;
-                        cx.notify();
-                    }))
+        use gpui_kit::component::tab::{Tab as Item, TabBar};
+        let selected = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
+        TabBar::new("instance-tabs")
+            .underline()
+            .selected_index(selected)
+            .children(Tab::ALL.map(|tab| Item::new().label(tab.label()).cursor_pointer()))
+            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                this.tab = Tab::ALL[*ix];
+                cx.notify();
             }))
     }
 }
 
 impl Render for Detail {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = match self.tab {
+            Tab::Logs => {
+                let cachedir = self.instance.dir.join("zomboid");
+                self.logs
+                    .get_or_insert_with(|| {
+                        cx.new(|cx| super::logs_view::Logs::new(&cachedir, window, cx))
+                    })
+                    .clone()
+                    .into_any_element()
+            }
+            tab => {
+                let (icon, title, line) = tab.empty();
+                Empty::new(icon, title, line).into_any_element()
+            }
+        };
         div()
             .flex()
             .flex_col()
@@ -218,9 +220,6 @@ impl Render for Detail {
             .p_6()
             .child(self.header(cx))
             .child(self.tabs(cx))
-            .child({
-                let (icon, title, line) = self.tab.empty();
-                Empty::new(icon, title, line)
-            })
+            .child(body)
     }
 }

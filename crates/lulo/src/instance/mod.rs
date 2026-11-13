@@ -10,6 +10,10 @@ pub mod detail;
 pub mod install;
 #[path = "launch.model.rs"]
 pub mod launch;
+#[path = "logs.model.rs"]
+pub mod logs;
+#[path = "logs.view.rs"]
+mod logs_view;
 #[path = "store.model.rs"]
 pub mod store;
 

@@ -20,6 +20,9 @@ pub struct Account {
     /// Name on the public profile, which the user can change; `name` is the login and cannot.
     #[serde(default)]
     pub persona: Option<String>,
+    /// File name of the profile picture under [`avatars`]; `None` when the user has none.
+    #[serde(default)]
+    avatar: Option<String>,
     refresh_token: String,
 }
 
@@ -39,14 +42,49 @@ impl Account {
     pub fn display(&self) -> &str {
         self.persona.as_deref().unwrap_or(&self.name)
     }
+
+    /// The profile picture on disk, if the user has one.
+    pub fn avatar(&self) -> Option<std::path::PathBuf> {
+        let path = avatars().join(self.avatar.as_deref()?);
+        path.is_file().then_some(path)
+    }
 }
 
-/// Today's profile name; offline or a private profile leaves the last one known.
-async fn persona(steamid: u64) -> Option<String> {
-    runtime::spawn(async move { steam::profile::persona_name(&steam::http(), steamid).await })
-        .await
-        .ok()?
-        .ok()?
+/// Downloaded profile pictures. Named by Steam's file name, which changes with the picture,
+/// so the image cache never shows a stale one.
+fn avatars() -> std::path::PathBuf {
+    crate::instance::store::root().with_file_name("avatars")
+}
+
+/// Brings the name and picture up to date with the public profile. Offline, the last ones
+/// known stay; a private profile keeps its name but has no picture.
+async fn refresh(account: &mut Account) {
+    let steamid = account.steamid;
+    let latest = runtime::spawn(async move {
+        let http = steam::http();
+        let profile = steam::profile::profile(&http, steamid).await.ok()?;
+        let file = match profile.avatar.as_deref() {
+            None => None,
+            Some(url) => {
+                let file = url.rsplit('/').next()?.to_owned();
+                let path = avatars().join(&file);
+                if !path.is_file() {
+                    let bytes = steam::profile::avatar(&http, url).await.ok()?;
+                    std::fs::create_dir_all(avatars()).ok()?;
+                    std::fs::write(&path, bytes).ok()?;
+                }
+                Some(file)
+            }
+        };
+        Some((profile.name, file))
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some((name, file)) = latest {
+        account.persona = name.or(account.persona.take());
+        account.avatar = file;
+    }
 }
 
 fn entry() -> Result<keyring::Entry, String> {
@@ -75,9 +113,7 @@ pub async fn load() -> Option<Account> {
     if !alive {
         return None;
     }
-    if let Some(name) = persona(account.steamid).await {
-        account.persona = Some(name);
-    }
+    refresh(&mut account).await;
     Some(account)
 }
 
@@ -122,6 +158,7 @@ fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
 
 pub async fn forget() -> Result<(), String> {
     runtime::blocking(|| {
+        let _ = std::fs::remove_dir_all(avatars());
         match std::fs::remove_file(file()) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -226,12 +263,15 @@ async fn login(
                     .user(&tokens.account_name, &tokens.refresh_token, tokens.steamid)
                     .await
                     .map_err(fail)?;
-                return Ok(Account {
-                    persona: persona(tokens.steamid).await,
+                let mut account = Account {
+                    persona: None,
+                    avatar: None,
                     name: tokens.account_name,
                     steamid: tokens.steamid,
                     refresh_token: tokens.refresh_token,
-                });
+                };
+                refresh(&mut account).await;
+                return Ok(account);
             }
         }
     }

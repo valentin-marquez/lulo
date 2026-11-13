@@ -368,53 +368,36 @@ impl Shell {
         self.account.as_ref()
     }
 
-    /// Signed out: the sign-in dialog. Signed in: who it is, and a way to sign out.
+    /// The sign-in dialog, unless an account is already signed in.
     pub fn open_account(shell: WeakEntity<Shell>, window: &mut Window, cx: &mut App) {
-        let Ok(current) = shell.read_with(cx, |shell, _| shell.account.clone()) else {
+        if shell
+            .read_with(cx, |shell, _| shell.account.is_some())
+            .unwrap_or(true)
+        {
             return;
-        };
-        match current {
-            None => account::login::open(
-                move |signed_in, _, cx| {
-                    let _ = shell.update(cx, |shell, cx| {
-                        shell.account = Some(signed_in);
-                        cx.notify();
-                    });
-                },
-                window,
-                cx,
-            ),
-            Some(current) => {
-                use gpui_kit::component::WindowExt;
-                window.open_dialog(cx, move |dialog, _, _| {
-                    // Fades in settling from just above, and back out (the default drops from the window top).
-                    let dialog = dialog.entrance(DialogEntrance::FadeSlide);
-                    let shell = shell.clone();
-                    dialog
-                        .title("Steam account")
-                        .w(px(380.))
-                        .child(format!("Signed in as {}.", current.display()))
-                        .child(
-                            div().flex().justify_end().pt_4().child(
-                                crate::ui::FancyButton::new("sign-out", "Sign out")
-                                    .small()
-                                    .on_click(move |_, window, cx| {
-                                        window.close_dialog(cx);
-                                        let shell = shell.clone();
-                                        cx.spawn(async move |cx| {
-                                            let _ = account::forget().await;
-                                            let _ = shell.update(cx, |shell, cx| {
-                                                shell.account = None;
-                                                cx.notify();
-                                            });
-                                        })
-                                        .detach();
-                                    }),
-                            ),
-                        )
-                });
-            }
         }
+        account::login::open(
+            move |signed_in, _, cx| {
+                let _ = shell.update(cx, |shell, cx| {
+                    shell.account = Some(signed_in);
+                    cx.notify();
+                });
+            },
+            window,
+            cx,
+        )
+    }
+
+    /// Forgets the saved login.
+    pub fn sign_out(shell: WeakEntity<Shell>, cx: &mut App) {
+        cx.spawn(async move |cx| {
+            let _ = account::forget().await;
+            let _ = shell.update(cx, |shell, cx| {
+                shell.account = None;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Opens the create dialog; a created instance is listed and selected.

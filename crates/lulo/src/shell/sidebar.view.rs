@@ -1,11 +1,14 @@
 //! Left panel: pages, every instance with its state, then new instance, settings and account.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{Page, Shell};
+use crate::account::Account;
 use crate::instance::Status;
 
 const WIDTH: Pixels = px(248.);
@@ -45,6 +48,25 @@ fn tile(icon: IconName, cx: &App) -> Div {
         .border_color(theme.border)
         .text_color(theme.muted_foreground)
         .child(Icon::new(icon).size_4())
+}
+
+/// The account's tile: their Steam picture, or the generic icon when they have none.
+fn account_tile(account: Option<&Account>, cx: &App) -> Div {
+    match account.and_then(Account::avatar) {
+        Some(path) => div()
+            .flex_none()
+            .size(px(34.))
+            .rounded(px(8.))
+            .overflow_hidden()
+            // The picture needs its own radius: the frame's clip is a plain rectangle.
+            .child(
+                img(path)
+                    .size_full()
+                    .rounded(px(8.))
+                    .object_fit(ObjectFit::Cover),
+            ),
+        None => tile(IconName::CircleUser, cx),
+    }
 }
 
 fn label(text: impl Into<SharedString>) -> Div {
@@ -142,21 +164,50 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                 Some(signed_in) => (signed_in.display().to_owned(), "Steam"),
                 None => ("Not signed in".to_owned(), "Sign in to Steam"),
             };
-            row("account", false, cx)
-                .child(tile(IconName::CircleUser, cx))
+            let who = div()
+                .flex()
+                .flex_col()
+                .min_w_0()
+                .child(div().text_sm().truncate().child(name))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .min_w_0()
-                        .child(div().text_sm().truncate().child(name))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(detail),
-                        ),
-                )
-                .on_click(move |_, window, cx| Shell::open_account(account.clone(), window, cx))
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(detail),
+                );
+            if shell.account().is_none() {
+                row("account", false, cx)
+                    .child(account_tile(shell.account(), cx))
+                    .child(who)
+                    .on_click(move |_, window, cx| Shell::open_account(account.clone(), window, cx))
+                    .into_any_element()
+            } else {
+                // Signed in: the same row opens a menu beside it, like other launchers' account menus.
+                Button::new("account")
+                    .ghost()
+                    .w_full()
+                    .h_auto()
+                    .p_2()
+                    // The button centres its content; a full-width child keeps it at the left.
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .w_full()
+                            .min_w_0()
+                            .child(account_tile(shell.account(), cx))
+                            .child(who),
+                    )
+                    .dropdown_menu_with_anchor(Anchor::LeftCenter, move |menu, _, _| {
+                        let account = account.clone();
+                        menu.item(
+                            PopupMenuItem::new("Sign out")
+                                .icon(IconName::LogOut)
+                                .on_click(move |_, _, cx| Shell::sign_out(account.clone(), cx)),
+                        )
+                    })
+                    .into_any_element()
+            }
         })
 }

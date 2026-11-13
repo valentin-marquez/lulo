@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -203,6 +204,8 @@ impl Shell {
              mods. Files that didn't change are not downloaded again."
         );
         window.open_dialog(cx, move |dialog, _, _| {
+            // Fades in settling from just above, and back out (the default drops from the window top).
+            let dialog = dialog.entrance(DialogEntrance::FadeSlide);
             let (shell, instance, account) = (shell.clone(), instance.clone(), account.clone());
             dialog
                 .title(format!("Update {}?", instance.name))
@@ -384,6 +387,8 @@ impl Shell {
             Some(current) => {
                 use gpui_kit::component::WindowExt;
                 window.open_dialog(cx, move |dialog, _, _| {
+                    // Fades in settling from just above, and back out (the default drops from the window top).
+                    let dialog = dialog.entrance(DialogEntrance::FadeSlide);
                     let shell = shell.clone();
                     dialog
                         .title("Steam account")

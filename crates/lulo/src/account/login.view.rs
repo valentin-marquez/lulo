@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
+use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -46,6 +47,8 @@ pub fn open(
         login
     });
     window.open_dialog(cx, move |dialog, _, _| {
+        // Fades in settling from just above, and back out (the default drops from the window top).
+        let dialog = dialog.entrance(DialogEntrance::FadeSlide);
         dialog
             .title("Sign in to Steam")
             .w(px(420.))

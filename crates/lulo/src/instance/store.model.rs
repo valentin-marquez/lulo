@@ -164,6 +164,42 @@ pub fn set_icon(dir: &Path, icon: Option<Icon>) -> io::Result<()> {
     write(dir, &manifest)
 }
 
+/// Renames the instance. Its folder keeps the old id, which other things refer to.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the instance settings view (#17) will call it")
+)]
+pub fn rename(dir: &Path, name: &str) -> io::Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the name is empty",
+        ));
+    }
+    let path = dir.join(FILE);
+    let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    manifest.name = name.to_owned();
+    write(dir, &manifest)
+}
+
+/// Deletes the instance with its saves and mods, and any shared build nothing else runs.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the instance settings view (#17) will call it")
+)]
+pub fn delete(root: &Path, dir: &Path) -> io::Result<()> {
+    // Only an instance folder directly under the root: never an arbitrary path.
+    if dir.parent() != Some(root) || !dir.join(FILE).is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not an instance folder",
+        ));
+    }
+    std::fs::remove_dir_all(dir)?;
+    prune(root)
+}
+
 /// Records that the instance was just played.
 pub fn set_last_played(dir: &Path, at: u64) -> io::Result<()> {
     let path = dir.join(FILE);
@@ -287,6 +323,55 @@ mod tests {
         assert!(builds.join("1").is_dir());
         assert!(!builds.join("2").exists());
         assert!(builds.join("3").is_dir());
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn renames_keeping_the_folder() {
+        let root = temp_root("rename");
+        let a = create(&root, "Old name", "public").unwrap();
+
+        rename(&a.dir, "  New name ").unwrap();
+        let listed = list(&root);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name.as_ref(), "New name");
+        assert_eq!(listed[0].id, a.id);
+        assert!(rename(&a.dir, "   ").is_err());
+        assert_eq!(list(&root)[0].name.as_ref(), "New name");
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn deletes_an_instance_and_prunes_its_unused_build() {
+        let root = temp_root("delete");
+        let builds = builds(&root);
+        let (a, b) = (
+            create(&root, "A", "public").unwrap(),
+            create(&root, "B", "public").unwrap(),
+        );
+        for build in ["1", "2"] {
+            std::fs::create_dir_all(builds.join(build)).unwrap();
+            set_complete(&builds.join(build)).unwrap();
+        }
+        set_build(&a.dir, 1).unwrap();
+        set_build(&b.dir, 2).unwrap();
+        std::fs::write(a.dir.join("zomboid/save.txt"), "x").unwrap();
+
+        delete(&root, &a.dir).unwrap();
+        assert!(!a.dir.exists());
+        assert!(!builds.join("1").exists());
+        assert!(builds.join("2").is_dir());
+        assert_eq!(list(&root).len(), 1);
+
+        // Not an instance folder: the root itself, a stranger, a folder outside the root.
+        let outside = root.parent().unwrap().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        for target in [root.clone(), root.join("nothing"), outside.clone()] {
+            assert!(delete(&root, &target).is_err());
+        }
+        assert!(root.is_dir() && outside.is_dir());
 
         std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }

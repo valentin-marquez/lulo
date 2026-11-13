@@ -108,17 +108,18 @@ pub struct Timings {
 }
 
 /// Writes every file of `manifest` under `dir`, verifying each chunk. Files already on disk
-/// with the right size and SHA-1 are kept, so an interrupted install resumes. `progress`
-/// receives the bytes done so far, kept files included.
+/// with the right size and SHA-1 are kept, so an interrupted install resumes; files that match
+/// under `seed` (an older install) are copied from there instead of downloaded. `progress`
+/// receives the bytes done so far, kept and copied files included.
 // ponytail: a file that changed is downloaded whole; reusing its unchanged chunks (updates
 // between builds) is #24.
 pub async fn install(
     http: &reqwest::Client,
     hosts: &[String],
-    depot: u32,
-    key: &Key,
+    (depot, key): (u32, &Key),
     manifest: &Manifest,
     dir: &Path,
+    seed: Option<&Path>,
     mut progress: impl FnMut(u64),
 ) -> Result<Timings> {
     use futures_util::{StreamExt, stream};
@@ -153,6 +154,18 @@ pub async fn install(
         if verified(path.clone(), file).await {
             done += file.size;
             continue;
+        }
+        if let Some(seed) = seed {
+            let from = target(seed, &file.path)?;
+            if verified(from.clone(), file).await {
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                tokio::fs::copy(&from, &path).await?;
+                executable(&path).await?;
+                done += file.size;
+                continue;
+            }
         }
         // Each chunk is checked against its SHA-1; if they also tile the file exactly, the
         // file is right once all of them are written, whatever order they arrive in.

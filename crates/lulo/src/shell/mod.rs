@@ -47,6 +47,7 @@ pub struct Shell {
 impl Shell {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let root = store::root();
+        store::migrate(&root);
         cx.spawn(async move |this, cx| {
             let saved = account::load().await;
             let _ = this.update(cx, |shell, cx| {

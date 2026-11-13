@@ -44,10 +44,10 @@ async fn main() -> steam::Result<()> {
     let timings = steam::content::install(
         &http,
         &hosts,
-        depot,
-        &key,
+        (depot, &key),
         &manifest,
         std::path::Path::new(dir),
+        None,
         |_| {},
     )
     .await?;

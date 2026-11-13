@@ -1,4 +1,5 @@
-//! Installing an instance's branch: depots for this OS, downloaded and verified into `game/`.
+//! Installing an instance's branch: depots for this OS, downloaded and verified into the shared
+//! build folder (or the instance's own `game/` when detached).
 
 use std::time::Instant;
 
@@ -126,7 +127,13 @@ pub fn start(
     runtime::spawn(async move {
         let event = match install(&account, &instance, &events).await {
             Ok(build) => match store::set_build(&instance.dir, build) {
-                Ok(()) => Event::Done,
+                Ok(()) => {
+                    // The build this instance ran before may now be unused.
+                    if let Some(root) = instance.dir.parent() {
+                        let _ = store::prune(root);
+                    }
+                    Event::Done
+                }
                 Err(err) => Event::Failed(format!("installed, but couldn't record it: {err}")),
             },
             Err(err) => Event::Failed(err),
@@ -134,6 +141,16 @@ pub fn start(
         let _ = events.send(event);
     })
     .abort_handle()
+}
+
+/// The lock for installing into `game`, shared by every install that targets that folder.
+fn lock(game: &std::path::Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, LazyLock, Mutex};
+    static LOCKS: LazyLock<Mutex<HashMap<std::path::PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(game.to_owned()).or_default().clone()
 }
 
 async fn install(
@@ -152,6 +169,29 @@ async fn install(
         .find(|b| b.name == branch)
         .ok_or_else(|| format!("Steam no longer has the branch {branch}"))?
         .build_id;
+    let own = instance.dir.join("game");
+    // An own `game/` with no recorded build is a download from before builds were shared, cut
+    // short: it seeds the shared build and then goes away.
+    let partial = own.is_dir() && instance.build.is_none();
+    let detached = own.is_dir() && !partial;
+    let game = match instance.dir.parent() {
+        Some(root) if !detached => store::builds(root).join(build.to_string()),
+        _ => own.clone(),
+    };
+    // One install per build folder at a time; a second one waits here, then finds it complete.
+    let _writing = lock(&game).lock_owned().await;
+    // Another instance already installed this build: nothing to download.
+    if !detached && store::complete(&game) {
+        if partial {
+            let _ = std::fs::remove_dir_all(&own);
+        }
+        return Ok(build);
+    }
+    // Files that didn't change since the build the instance runs now are copied, not downloaded.
+    let seed = match partial {
+        true => Some(own.clone()),
+        false => instance.game().filter(|old| *old != game && old.is_dir()),
+    };
     let depots = pics::depots(&info, branch, os());
     if depots.is_empty() {
         return Err(format!("The {branch} branch has no files for {}", os()));
@@ -190,19 +230,32 @@ async fn install(
         .flat_map(|(_, _, m)| &m.files)
         .map(|f| f.size)
         .sum();
-    let game = instance.dir.join("game");
     let mut before = 0;
     for (depot, key, manifest) in &plan {
-        let timings = content::install(&http, &hosts, *depot, key, manifest, &game, |done| {
-            let _ = events.send(Event::Progress {
-                done: before + done,
-                total,
-            });
-        })
+        let timings = content::install(
+            &http,
+            &hosts,
+            (*depot, key),
+            manifest,
+            &game,
+            seed.as_deref(),
+            |done| {
+                let _ = events.send(Event::Progress {
+                    done: before + done,
+                    total,
+                });
+            },
+        )
         .await
         .map_err(|e| e.to_string())?;
         eprintln!("depot {depot}: {timings:?}");
         before += manifest.files.iter().map(|f| f.size).sum::<u64>();
+    }
+    if !detached {
+        store::set_complete(&game).map_err(|e| e.to_string())?;
+    }
+    if partial {
+        let _ = std::fs::remove_dir_all(&own);
     }
     Ok(build)
 }

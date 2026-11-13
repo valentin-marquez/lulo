@@ -49,6 +49,16 @@ pub enum Status {
 }
 
 impl Instance {
+    /// The game files this instance runs: its own `game/` when detached, else its shared build.
+    pub fn game(&self) -> Option<PathBuf> {
+        let build = self.build?;
+        let own = self.dir.join("game");
+        if own.is_dir() {
+            return Some(own);
+        }
+        Some(store::builds(self.dir.parent()?).join(build.to_string()))
+    }
+
     /// `latest` is the branch's newest build id, when known; without it an install is `Ready`.
     pub fn status(&self, latest: Option<u32>) -> Status {
         match (self.build, latest) {

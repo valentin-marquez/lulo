@@ -6,9 +6,11 @@ use std::process::{Child, Command};
 
 use super::{APP, Instance};
 
-/// The command that starts the game in `game/` with saves, mods and options in `zomboid/`.
+/// The command that starts the instance's game files with saves, mods and options in `zomboid/`.
 pub fn command(instance: &Instance) -> io::Result<Command> {
-    let game = instance.dir.join("game");
+    let game = instance
+        .game()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the game isn't installed"))?;
     let cachedir = format!("-cachedir={}", instance.dir.join("zomboid").display());
     let missing = |what: &Path| {
         io::Error::new(

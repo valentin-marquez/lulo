@@ -60,7 +60,7 @@ pub async fn download(
         &key,
     )
     .await?;
-    content::install(http, &hosts, item.app, &key, &manifest, dir, |_| {})
+    content::install(http, &hosts, (item.app, &key), &manifest, dir, None, |_| {})
         .await
         .map(drop)
 }

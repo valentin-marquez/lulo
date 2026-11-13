@@ -21,6 +21,7 @@ pub mod emsg {
     pub const DEST_JOB_FAILED: u32 = 113;
     pub const SERVICE_METHOD_RESPONSE: u32 = 147;
     pub const SERVICE_METHOD_CALL: u32 = 151;
+    pub const CLIENT_HEART_BEAT: u32 = 703;
     pub const CLIENT_LOGON_RESPONSE: u32 = 751;
     pub const CLIENT_GET_DEPOT_DECRYPTION_KEY: u32 = 5438;
     pub const CLIENT_GET_DEPOT_DECRYPTION_KEY_RESPONSE: u32 = 5439;

@@ -16,6 +16,22 @@ async fn lists_project_zomboid_branches_anonymously() {
     assert!(branches.iter().any(|b| b.name == "public"), "{branches:?}");
 }
 
+/// Steam drops a session that stays silent for `heartbeat_seconds` (about 9), so a request
+/// after several intervals only works if the client kept beating.
+#[tokio::test]
+#[ignore = "needs network access to Steam"]
+async fn session_survives_past_the_heartbeat_interval() {
+    let http = steam::http();
+    let mut client = steam::Client::anonymous(&http)
+        .await
+        .expect("anonymous logon");
+    tokio::time::sleep(std::time::Duration::from_secs(150)).await;
+    let info = steam::pics::app_info(&mut client, &http, PROJECT_ZOMBOID)
+        .await
+        .expect("session still open after 150 s");
+    assert!(!steam::pics::branches(&info).is_empty());
+}
+
 /// A small PZ mod. Set `LULO_STEAMCMD_MOD` to the folder SteamCMD downloaded for it to also
 /// compare every file byte for byte.
 const MOD: u64 = 3832274571;

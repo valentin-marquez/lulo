@@ -42,6 +42,12 @@ pub struct CMsgClientHello {
 }
 
 #[derive(Clone, PartialEq, Message)]
+pub struct CMsgClientHeartBeat {
+    #[prost(bool, optional, tag = "1")]
+    pub send_reply: Option<bool>,
+}
+
+#[derive(Clone, PartialEq, Message)]
 pub struct CMsgClientLogon {
     #[prost(uint32, optional, tag = "1")]
     pub protocol_version: Option<u32>,

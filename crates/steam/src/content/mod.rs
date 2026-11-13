@@ -79,16 +79,25 @@ pub async fn manifest(
         manifest_id: Some(id),
         app_branch: Some(branch.to_owned()),
     };
-    // The code expires within minutes, so fetch it right before the download.
-    let code: CContentServerDirectoryGetManifestRequestCodeResponse = client
-        .call("ContentServerDirectory.GetManifestRequestCode", &request)
-        .await?;
-    let url = format!(
-        "https://{host}/depot/{depot}/manifest/{id}/5/{}",
-        code.manifest_request_code()
-    );
-    let zip = crate::read_capped(http.get(url).send().await?, MANIFEST_CAP, "manifest").await?;
-    manifest::parse(&zip, key)
+    // The code expires within minutes: fetch it right before the download, and once more if
+    // the CDN rejects it as expired (401/403) because the download started late.
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        let code: CContentServerDirectoryGetManifestRequestCodeResponse = client
+            .call("ContentServerDirectory.GetManifestRequestCode", &request)
+            .await?;
+        let url = format!(
+            "https://{host}/depot/{depot}/manifest/{id}/5/{}",
+            code.manifest_request_code()
+        );
+        let response = http.get(url).send().await?;
+        if tries < 2 && matches!(response.status().as_u16(), 401 | 403) {
+            continue;
+        }
+        let zip = crate::read_capped(response, MANIFEST_CAP, "manifest").await?;
+        return manifest::parse(&zip, key);
+    }
 }
 
 /// Chunks downloaded at once. They finish in any order and are written at their offset, so

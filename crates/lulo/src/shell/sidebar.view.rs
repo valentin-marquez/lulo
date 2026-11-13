@@ -187,6 +187,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                 // Signed in: the same row opens a menu beside it, like other launchers' account menus.
                 Button::new("account")
                     .ghost()
+                    .cursor_pointer()
                     .w_full()
                     .h_auto()
                     // 8 px like `row`, plus the 1 px border the other rows have and this button hasn't.

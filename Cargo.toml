@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Patched dependencies; each folder lists its changes in LULO-PATCHES.md.
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -23,3 +25,7 @@ opt-level = 2
 # Chunk decrypt and LZMA run about 5x slower unoptimized, which made dev installs CPU-bound.
 [profile.dev.package.steam]
 opt-level = 3
+
+# gpui-component patched for things it can't do yet (see vendor/gpui-component/LULO-PATCHES.md).
+[patch.crates-io]
+gpui-component = { path = "vendor/gpui-component" }

@@ -143,7 +143,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                 .child(shell.instances.len().to_string()),
         )
         .children(instances)
-        .child(div().flex_1())
+        .child(div().h(px(1.)).mx_2().my_1().bg(theme.border))
         .child(
             row("new", false, cx)
                 .child(tile(IconName::Plus, cx))
@@ -153,6 +153,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     move |_, window, cx| Shell::create(handle.clone(), window, cx)
                 }),
         )
+        .child(div().flex_1())
         .child(
             row("settings", false, cx)
                 .child(tile(IconName::Settings, cx))

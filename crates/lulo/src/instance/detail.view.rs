@@ -1,8 +1,8 @@
 //! The selected instance: header with Play, and its Mods / Worlds / Logs tabs.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::Button;
-use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -106,20 +106,7 @@ impl Detail {
             .flex()
             .items_center()
             .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(56.))
-                    .rounded(theme.radius_lg)
-                    .bg(theme.group_box)
-                    .border_1()
-                    .border_color(theme.border)
-                    .text_color(theme.muted_foreground)
-                    .child(Icon::new(IconName::Box).size_6()),
-            )
+            .child(super::art::art(instance, 56., theme.radius_lg, cx))
             .child(
                 div()
                     .flex()

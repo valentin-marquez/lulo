@@ -1,5 +1,7 @@
 //! A game install with its own build, mods and settings.
 
+#[path = "art.view.rs"]
+pub mod art;
 #[path = "branches.model.rs"]
 pub mod branches;
 #[path = "create.view.rs"]
@@ -18,6 +20,8 @@ mod logs_view;
 pub mod store;
 
 use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme;
@@ -39,6 +43,70 @@ pub struct Instance {
     pub build: Option<u32>,
     /// Unix time of the last launch.
     pub last_played: Option<u64>,
+    /// Chosen icon; `None` shows the one picked from the id.
+    pub icon: Option<Icon>,
+}
+
+/// An instance's picture, stored in its `instance.json`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Icon {
+    /// An item icon from the installed game (`Item_Axe`) on one of the palette colors.
+    Item { item: String, color: u32 },
+    /// A picture the user chose, copied into the instance folder under this name.
+    Image { file: String },
+}
+
+/// Backgrounds for item icons, top and bottom of a vertical gradient: vivid enough for the
+/// game's dark, detailed sprites (taken from Modrinth's instance icon backgrounds). An icon
+/// stores the top color.
+pub const BACKGROUNDS: [(u32, u32); 12] = [
+    (0xD93263, 0xF65862),
+    (0xFF902C, 0xFFB14E),
+    (0xFFC92C, 0xFFEA4F),
+    (0x76DD21, 0xC3FC4B),
+    (0x10A324, 0x49CD47),
+    (0x493DFF, 0x636BFF),
+    (0x2683FF, 0x59BCFF),
+    (0xBF59FD, 0xB985FF),
+    (0xF744C3, 0xFE76ED),
+    (0xB1B1B1, 0xD6D6D6),
+    (0x383D4D, 0x4A4E57),
+    (0x1C1E2A, 0x242630),
+];
+
+/// The gradient's bottom color for a stored top color; colors from older palettes get a
+/// lighter shade of themselves.
+pub fn background_bottom(top: u32) -> u32 {
+    BACKGROUNDS
+        .iter()
+        .find(|(t, _)| *t == top)
+        .map(|(_, bottom)| *bottom)
+        .unwrap_or_else(|| {
+            let lift = |c: u32| c + (255 - c) / 5;
+            let [_, r, g, b] = top.to_be_bytes();
+            u32::from_be_bytes([
+                0,
+                lift(r.into()) as u8,
+                lift(g.into()) as u8,
+                lift(b.into()) as u8,
+            ])
+        })
+}
+
+impl Icon {
+    /// A stable pick for `seed`, so an instance keeps its look until someone chooses one.
+    pub fn picked(seed: &str) -> Icon {
+        // FNV-1a: tiny, stable across runs and platforms (std's hasher is randomly seeded).
+        let hash = seed.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+        });
+        let picks: Vec<&str> = crate::game::items().collect();
+        Icon::Item {
+            item: picks[hash as usize % picks.len()].to_owned(),
+            color: BACKGROUNDS[(hash >> 32) as usize % BACKGROUNDS.len()].0,
+        }
+    }
 }
 
 // ponytail: Downloading lives in the shell (installs in progress), not on disk.
@@ -53,6 +121,10 @@ pub enum Status {
 }
 
 impl Instance {
+    pub fn icon(&self) -> Icon {
+        self.icon.clone().unwrap_or_else(|| Icon::picked(&self.id))
+    }
+
     /// The game files this instance runs: its own `game/` when detached, else its shared build.
     pub fn game(&self) -> Option<PathBuf> {
         let build = self.build?;
@@ -154,7 +226,19 @@ mod tests {
             branch: "public".into(),
             build,
             last_played: None,
+            icon: None,
         }
+    }
+
+    #[test]
+    fn picks_a_stable_icon_per_instance() {
+        use super::Icon;
+        assert_eq!(Icon::picked("new-instance"), Icon::picked("new-instance"));
+        let picks: std::collections::HashSet<String> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .iter()
+            .map(|id| format!("{:?}", Icon::picked(id)))
+            .collect();
+        assert!(picks.len() > 3, "ids spread over the set: {picks:?}");
     }
 
     #[test]

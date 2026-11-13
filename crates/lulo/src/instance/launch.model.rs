@@ -115,6 +115,7 @@ mod tests {
             branch: "public".into(),
             build: Some(1),
             last_played: None,
+            icon: None,
         };
         assert!(command(&instance).is_err(), "no game files yet");
 

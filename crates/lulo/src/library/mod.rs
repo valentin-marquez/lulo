@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use crate::instance::{Instance, Status};
 use crate::shell::{Page, Shell};
-use crate::ui::{self, Empty, FancyButton, SPRING, SPRING_FAST, SPRING_PRESS};
+use crate::ui::{self, Empty, FancyButton, SPRING_FAST, SPRING_PRESS};
 
 /// Card width; the art inside is square.
 const CARD: f32 = 176.;
@@ -266,14 +266,6 @@ fn card(
         cx,
         |_, _| false,
     );
-    let hover: f32 = spring(
-        SharedString::from(format!("card-hover-spring-{id}")),
-        if *hovered.read(cx) { 1. } else { 0. },
-        SPRING,
-        window,
-        cx,
-    );
-    // The surface answers the pointer faster than the play button fades in.
     let surface: f32 = spring(
         SharedString::from(format!("card-surface-{id}")),
         if *hovered.read(cx) { 1. } else { 0. },
@@ -299,7 +291,7 @@ fn card(
     // Running and installing keep their button up: it is how you stop them.
     let reveal = match status {
         Status::Running | Status::Installing(_) => 1.,
-        _ => hover,
+        _ => surface,
     };
 
     let badge = |text: SharedString| {
@@ -328,16 +320,8 @@ fn card(
         _ => None,
     };
 
-    let art = div()
+    let art = crate::instance::art::art(&instance, ART, theme.radius, cx)
         .relative()
-        .size(px(ART))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(theme.radius)
-        .bg(theme.muted)
-        .text_color(theme.muted_foreground)
-        .child(Icon::new(IconName::Box).size_12())
         .child(
             div()
                 .absolute()
@@ -351,21 +335,26 @@ fn card(
         })
         .when(reveal > 0.01 && enabled, |this| {
             let (shell, id) = (shell.clone(), id.clone());
+            // Grows from its center (28 to 40 px, icon with it) as it fades in: the scale
+            // GPUI can't do on a box, done with size inside a fixed slot.
+            let size = 28. + 12. * reveal;
             this.child(
                 div()
                     .absolute()
                     .bottom_3()
                     .right_3()
+                    .size(px(40.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .opacity(reveal)
-                    // Rises a few pixels as it fades in.
-                    .mb(px(6. * (1. - reveal)))
                     .child(
                         div()
                             .id(SharedString::from(format!("card-play-{id}")))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .size(px(40.))
+                            .size(px(size))
                             .rounded_full()
                             .bg(theme.primary)
                             .text_color(theme.primary_foreground)
@@ -381,7 +370,7 @@ fn card(
                             .tooltip(move |window, cx| {
                                 Tooltip::new(action.clone()).build(window, cx)
                             })
-                            .child(Icon::new(icon).size_5())
+                            .child(Icon::new(icon).size(px(size / 2.)))
                             .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 Shell::play(shell.clone(), id.clone(), window, cx);
@@ -529,7 +518,6 @@ impl Render for Library {
             .into_any_element()
         };
 
-        let theme = cx.theme();
         div()
             .id("library")
             .flex()
@@ -540,21 +528,9 @@ impl Render for Library {
             .overflow_y_scroll()
             .child(
                 div()
-                    .flex()
-                    .items_baseline()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Library"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(total.to_string()),
-                    ),
+                    .text_xl()
+                    .font_weight(FontWeight::BOLD)
+                    .child("Library"),
             )
             .child(self.toolbar(window, cx))
             .child(body)

@@ -85,6 +85,13 @@ impl AssetSource for AppAssets {
                 "../../../assets/icons/png/lulo-64.png"
             ))));
         }
+        if let Some(item) = path
+            .strip_prefix("instance-icons/")
+            .and_then(|p| p.strip_suffix(".png"))
+            && let Some(bytes) = crate::game::icon(item)
+        {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
         if let Some(bytes) = ui_icon(path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }

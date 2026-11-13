@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::Instance;
+use super::{Icon, Instance};
 
 const FILE: &str = "instance.json";
 
@@ -23,6 +23,8 @@ struct Manifest {
     #[serde(default)]
     last_played: Option<u64>,
     created: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<Icon>,
 }
 
 /// Where instances live: `$LULO_HOME/instances`, else the OS data dir.
@@ -140,6 +142,7 @@ pub fn create(root: &Path, name: &str, branch: &str) -> io::Result<Instance> {
         build: None,
         last_played: None,
         created: now(),
+        icon: None,
     };
     write(&dir, &manifest)?;
     Ok(instance(id, dir, &manifest))
@@ -150,6 +153,14 @@ pub fn set_build(dir: &Path, build: u32) -> io::Result<()> {
     let path = dir.join(FILE);
     let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
     manifest.build = Some(build);
+    write(dir, &manifest)
+}
+
+/// Records the instance's icon; `None` goes back to the picked one.
+pub fn set_icon(dir: &Path, icon: Option<Icon>) -> io::Result<()> {
+    let path = dir.join(FILE);
+    let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    manifest.icon = icon;
     write(dir, &manifest)
 }
 
@@ -176,6 +187,7 @@ fn instance(id: String, dir: PathBuf, m: &Manifest) -> Instance {
         branch: m.branch.clone().into(),
         build: m.build,
         last_played: m.last_played,
+        icon: m.icon.clone(),
     }
 }
 

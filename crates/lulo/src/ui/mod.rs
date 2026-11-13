@@ -30,6 +30,16 @@ pub const SPRING_FAST: Spring = Spring::new(Duration::from_millis(150));
 /// Press feedback (the face sinking under the pointer): quicker still, about Modrinth's 100 ms.
 pub const SPRING_PRESS: Spring = Spring::new(Duration::from_millis(100));
 
+/// One-shot entrances (a step, a panel, a new icon): transitions.dev's 200 ms page slide.
+/// Springs need a target that changes; an element that just appeared has none, so these use a
+/// keyed `Animation` that restarts whenever its id changes.
+pub const ENTER: Duration = Duration::from_millis(200);
+
+/// transitions.dev's `cubic-bezier(0.22, 1, 0.36, 1)`: fast start, long soft landing.
+pub fn ease_out_quint(t: f32) -> f32 {
+    1. - (1. - t).powi(5)
+}
+
 /// The color a surface takes under the pointer: darker in light themes, lighter in dark ones,
 /// like Modrinth's `brightness()` hover (0.9 and 1.25). GPUI has no filters, so it is computed.
 pub fn hovered(color: Hsla, cx: &App) -> Hsla {

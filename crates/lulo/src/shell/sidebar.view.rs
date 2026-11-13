@@ -84,7 +84,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
 
     let instances = shell.instances.iter().enumerate().map(|(ix, instance)| {
         row(instance.id.clone(), shell.page == Page::Instance(ix), cx)
-            .child(tile(IconName::Box, cx))
+            .child(crate::instance::art::art(instance, 34., px(8.), cx))
             .child(
                 div()
                     .flex()

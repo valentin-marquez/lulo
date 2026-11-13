@@ -145,6 +145,21 @@ impl Detail {
                     .size(px(40.))
                     .rounded(px(10.)),
             )
+            .when(status == Status::Outdated, |this| {
+                let (shell, id) = (self.shell.clone(), instance.id.clone());
+                this.child(
+                    Button::new("update")
+                        .outline()
+                        .cursor_pointer()
+                        .icon(IconName::Download)
+                        .label("Update")
+                        .h(px(40.))
+                        .rounded(px(10.))
+                        .on_click(move |_, window, cx| {
+                            Shell::confirm_update(shell.clone(), id.clone(), window, cx)
+                        }),
+                )
+            })
             .child({
                 let (label, icon, enabled) = status.action();
                 let (shell, id) = (self.shell.clone(), instance.id.clone());

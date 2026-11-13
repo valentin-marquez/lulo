@@ -93,7 +93,7 @@ impl Status {
             Status::NotInstalled => ("Install".into(), IconName::Download, true),
             // Progress shows next to it (bar and download manager), so the button offers the way out.
             Status::Installing(_) => ("Cancel".into(), IconName::Close, true),
-            // Updating waits for the user's confirmation (#18); Play still works meanwhile.
+            // Updating is its own button, after the user confirms; Play still works meanwhile.
             Status::Ready | Status::Outdated => ("Play".into(), IconName::Play, true),
             Status::Running => ("Stop".into(), IconName::Square, true),
         }

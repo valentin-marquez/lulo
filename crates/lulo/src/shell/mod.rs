@@ -169,6 +169,68 @@ impl Shell {
         }
     }
 
+    /// Asks before updating an outdated instance: a new build can break saves and mods.
+    pub fn confirm_update(
+        shell: WeakEntity<Shell>,
+        id: SharedString,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        use gpui_kit::component::WindowExt;
+        use gpui_kit::component::button::Button;
+        let Ok((instance, account)) = shell.read_with(cx, |shell, _| {
+            let instance = shell.instances.iter().find(|i| i.id == id).cloned();
+            (
+                instance.map(|i| (shell.latest(&i), i)),
+                shell.account.clone(),
+            )
+        }) else {
+            return;
+        };
+        let Some((Some(newest), instance)) = instance else {
+            return;
+        };
+        let Some(have) = instance.build else { return };
+        let Some(account) = account else {
+            return Self::open_account(shell, window, cx);
+        };
+        let text = format!(
+            "Build {have} will be replaced by build {newest}. A new build can break saves and \
+             mods. Files that didn't change are not downloaded again."
+        );
+        window.open_dialog(cx, move |dialog, _, _| {
+            let (shell, instance, account) = (shell.clone(), instance.clone(), account.clone());
+            dialog
+                .title(format!("Update {}?", instance.name))
+                .w(px(420.))
+                .child(text.clone())
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .pt_4()
+                        .child(
+                            Button::new("cancel-update")
+                                .outline()
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            crate::ui::FancyButton::new("confirm-update", "Update")
+                                .small()
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let handle = window.window_handle();
+                                    let _ = shell.update(cx, |shell, cx| {
+                                        shell.install(instance.clone(), account.clone(), handle, cx)
+                                    });
+                                }),
+                        ),
+                )
+        });
+    }
+
     /// Tracks a running game until it exits, then records the play time.
     fn watch(&mut self, instance: Instance, child: std::process::Child, cx: &mut Context<Self>) {
         let id = instance.id.clone();

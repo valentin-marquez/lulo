@@ -187,7 +187,8 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
                     .ghost()
                     .w_full()
                     .h_auto()
-                    .p_2()
+                    // 8 px like `row`, plus the 1 px border the other rows have and this button hasn't.
+                    .p(px(9.))
                     // The button centres its content; a full-width child keeps it at the left.
                     .child(
                         div()

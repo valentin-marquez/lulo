@@ -10,6 +10,7 @@
       "radius.lg": 14,
       "colors": {
         "background": "#ffffff",
+        "overlay": "#18181b66",
         "foreground": "#18181b",
         "border": "#e4e4e7",
         "ring": "#f85303",
@@ -57,6 +58,7 @@
       "radius.lg": 14,
       "colors": {
         "background": "#1c1c1f",
+        "overlay": "#0000008c",
         "foreground": "#fafafa",
         "border": "#2a2a2e",
         "ring": "#f85303",

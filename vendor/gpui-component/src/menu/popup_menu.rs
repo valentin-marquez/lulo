@@ -1325,17 +1325,21 @@ impl PopupMenu {
 
         let selected = self.selected_index == Some(ix);
         const EDGE_PADDING: Pixels = px(4.);
-        const INNER_PADDING: Rems = rems(0.5);
+        // lulo: roomier sides to go with the taller rows (was 0.5rem).
+        const INNER_PADDING: Rems = rems(0.75);
 
         let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
 
         let (item_height, radius) = match self.size {
             Size::Small => (rems(1.25), options.radius.half()),
-            _ => (rems(1.625), options.radius),
+            // lulo: 34 px rows (was 26 px), closer to Modrinth's menus and easier to hit.
+            _ => (rems(2.125), options.radius),
         };
 
         let this = MenuItemElement::new(ix)
             .relative()
+            // lulo: everything clickable shows the hand.
+            .cursor_pointer()
             .text_sm()
             .py_0()
             .px(INNER_PADDING)
@@ -1616,7 +1620,8 @@ impl Render for PopupMenu {
                     .id("items")
                     .p_1()
                     .gap_y_0p5()
-                    .min_w(rems(8.))
+                    // lulo: was 8rem.
+                    .min_w(rems(12.))
                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                     .map(|this| match self.max_width {
                         Some(max_width) => this.max_w(max_width),

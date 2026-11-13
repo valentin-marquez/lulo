@@ -4,7 +4,7 @@ use std::{
 };
 
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, DismissEvent, Element, ElementId, Entity,
+    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DismissEvent, Element, ElementId, Entity,
     FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
     InteractiveElement, IntoElement, LayoutId, LongPressEvent, MouseButton, MouseDownEvent,
     ParentElement, Pixels, Point, Position, Style, StyleRefinement, Styled, Subscription,
@@ -191,7 +191,25 @@ impl DeferredMenu {
                             .position(self.position)
                             .snap_to_window_with_margin(px(8.))
                             .anchor(self.anchor)
-                            .child(self.menu_view.clone()),
+                            // lulo: the menu fades in rising 6px, like every other popover
+                            // (200 ms, ease-out quint). Each open makes a new menu entity, so
+                            // keying on it replays the entrance.
+                            .child(
+                                div()
+                                    .relative()
+                                    .child(self.menu_view.clone())
+                                    .with_animation(
+                                        ElementId::NamedInteger(
+                                            "context-menu-enter".into(),
+                                            self.menu_view.entity_id().as_u64(),
+                                        ),
+                                        Animation::new(std::time::Duration::from_millis(200))
+                                            .with_easing(|t| 1. - (1. - t).powi(5)),
+                                        |menu, delta| {
+                                            menu.top(px(6. * (1. - delta))).opacity(delta)
+                                        },
+                                    ),
+                            ),
                     ),
             ),
         )

@@ -21,15 +21,30 @@ use gpui_base::{
 
 use crate::{
     ActiveTheme as _, Edges, Icon, IconName, Sizable as _, StyledExt, TITLE_BAR_HEIGHT,
-    animation::cubic_bezier,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     styled::toast_shadow,
     v_flex,
 };
 
-const NOTIFICATION_TRANSITION_DURATION: Duration = Duration::from_millis(400);
+// lulo: Modrinth's toast timing, 250 ms in and out (was 400 / 200 ms), travelling about its own
+// height (was 96 px, which read as flying in from far away).
+const NOTIFICATION_TRANSITION_DURATION: Duration = Duration::from_millis(250);
 const NOTIFICATION_EXIT_DURATION: Duration = Duration::from_millis(200);
-const NOTIFICATION_TRANSITION_OFFSET: Pixels = px(96.);
+const NOTIFICATION_TRANSITION_OFFSET: Pixels = px(56.);
+
+/// lulo: the stack moves on the same 250 ms as the toasts (Sonner's is 400 ms).
+fn lulo_motion() -> ToastMotion {
+    ToastMotion {
+        duration: NOTIFICATION_TRANSITION_DURATION,
+        exit_duration: NOTIFICATION_EXIT_DURATION,
+        // A list of pills rather than Sonner's pile of same-sized cards: each sits its own
+        // height above the next (40 px + 8 px), full size, and only the newest three show.
+        collapsed_peek: px(48.),
+        expanded_gap: px(8.),
+        collapsed_scale_step: 0.,
+        collapsed_visible: 3,
+    }
+}
 const DEFAULT_NOTIFICATION_WIDTH: Pixels = px(382.);
 const NOTIFICATION_ADVANCE_INTERVAL: Duration = Duration::from_millis(50);
 struct DismissRequest;
@@ -416,67 +431,74 @@ impl Render for Notification {
             None => self.icon.clone(),
             Some(type_) => Some(type_.icon(cx)),
         };
-        let has_icon = icon.is_some();
         let placement = self.placement.unwrap_or(cx.theme().notification.placement);
 
-        BaseToast::new("notification")
+        // lulo: a compact pill that hugs its text, centered in the stack: status icon and one
+        // line; with a title it grows to two lines (title, then the detail in muted text). No
+        // close button, which sat over the text at this size: a click dismisses it.
+        let two_lines = self.title.is_some() && (self.message.is_some() || content.is_some());
+        let user_click = self.on_click.clone();
+        let toast = BaseToast::new("notification")
             .transition_status(transition_status)
             .h_flex()
-            .group("")
             .occlude()
             .relative()
-            .w_full()
+            .max_w_full()
+            .min_h(px(40.))
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().tokens.popover)
-            .rounded(cx.theme().radius_lg)
+            .map(|this| {
+                if two_lines {
+                    this.rounded(cx.theme().radius_lg).items_start().py_2p5()
+                } else {
+                    this.rounded_full().items_center().py_2()
+                }
+            })
             .shadow(toast_shadow(1.))
-            .py_3p5()
-            .px_4()
-            .gap_3()
+            .pl_3p5()
+            .pr_4()
+            .gap_2p5()
+            .cursor_pointer()
             .refine_style(&self.style)
             .when_some(icon, |this, icon| {
-                this.child(div().absolute().top(px(18.)).left_4().child(icon))
+                this.child(
+                    div()
+                        .flex_none()
+                        .when(two_lines, |this| this.pt(px(1.)))
+                        .child(icon.size(px(18.))),
+                )
             })
             .child(
                 v_flex()
-                    .flex_1()
-                    .overflow_hidden()
-                    .when(has_icon, |this| this.pl_6())
+                    .min_w_0()
+                    .gap_0p5()
                     .when_some(self.title.clone(), |this, title| {
                         this.child(div().text_sm().font_semibold().child(title))
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().child(message))
+                        this.child(
+                            div()
+                                .text_sm()
+                                .map(|this| {
+                                    if two_lines {
+                                        this.text_color(cx.theme().muted_foreground)
+                                    } else {
+                                        this.font_medium()
+                                    }
+                                })
+                                .child(message),
+                        )
                     })
                     .when_some(content, |this, content| this.child(content)),
             )
             .when_some(action, |this, action| this.child(action))
-            .child(
-                div()
-                    .absolute()
-                    .top_1()
-                    .right_1()
-                    .invisible()
-                    .group_hover("", |this| this.visible())
-                    .child(
-                        Button::new("close")
-                            .icon(IconName::Close)
-                            .accessibility_label("Close")
-                            .ghost()
-                            .xsmall()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.dismiss(window, cx);
-                            })),
-                    ),
-            )
-            .when_some(self.on_click.clone(), |this, on_click| {
-                this.on_click(cx.listener(move |view, event, window, cx| {
-                    view.dismiss(window, cx);
+            .on_click(cx.listener(move |view, event, window, cx| {
+                view.dismiss(window, cx);
+                if let Some(on_click) = &user_click {
                     on_click(event, window, cx);
-                }))
-            })
+                }
+            }))
             .on_aux_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
                 if event.is_middle_click() {
                     view.dismiss(window, cx);
@@ -489,7 +511,8 @@ impl Render for Notification {
                 } else {
                     NOTIFICATION_TRANSITION_DURATION
                 })
-                .with_easing(cubic_bezier(0.25, 0.1, 0.25, 1.)),
+                // lulo: ease-out quint, like every other entrance in the app.
+                .with_easing(|t| 1. - (1. - t).powi(5)),
                 move |this, delta| {
                     if closing {
                         let opacity = 1. - delta;
@@ -529,7 +552,9 @@ impl Render for Notification {
                             .shadow(toast_shadow(opacity.powi(3)))
                     }
                 },
-            )
+            );
+        // lulo: the stack gives every toast its full width; the pill sits in the middle of it.
+        div().w_full().flex().justify_center().child(toast)
     }
 }
 
@@ -714,7 +739,7 @@ pub struct NotificationList {
 impl NotificationList {
     pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            notifications: ToastManager::new(ToastMotion::sonner()),
+            notifications: ToastManager::new(lulo_motion()),
             stacks: Vec::new(),
             focus_handle: cx.focus_handle().tab_stop(true),
             autohide_ids: HashSet::new(),
@@ -837,6 +862,7 @@ impl NotificationList {
 
         let id = notification.id.clone();
         let autohide = notification.autohide;
+        let lingers = notification.title.is_some();
         let window_id = window.window_handle().window_id();
 
         let notification = cx.new(|_| notification);
@@ -871,7 +897,9 @@ impl NotificationList {
             id,
             notification,
             ToastOptions {
-                timeout: autohide.then_some(Duration::from_secs(5)),
+                // lulo: a one-line toast leaves after 3 s (was 5 s for all); one with a detail
+                // line stays the 5 s it takes to read it.
+                timeout: autohide.then_some(Duration::from_secs(if lingers { 5 } else { 3 })),
             },
             cx.background_executor().now(),
         );
@@ -1051,6 +1079,7 @@ impl Render for NotificationList {
                     |stack, (id, item)| stack.item(format!("{id:?}"), item),
                 )
                 .placement(anchor)
+                .motion(lulo_motion())
                 .focus_handle(stack.focus_handle.clone())
                 .v_flex()
                 .w(width)

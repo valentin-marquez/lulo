@@ -17,6 +17,9 @@ const ENTRY: &str = "steam";
 pub struct Account {
     pub name: String,
     pub steamid: u64,
+    /// Name on the public profile, which the user can change; `name` is the login and cannot.
+    #[serde(default)]
+    pub persona: Option<String>,
     refresh_token: String,
 }
 
@@ -32,6 +35,18 @@ impl Account {
             .await?;
         Ok(client)
     }
+    /// What to show for this account.
+    pub fn display(&self) -> &str {
+        self.persona.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// Today's profile name; offline or a private profile leaves the last one known.
+async fn persona(steamid: u64) -> Option<String> {
+    runtime::spawn(async move { steam::profile::persona_name(&steam::http(), steamid).await })
+        .await
+        .ok()?
+        .ok()?
 }
 
 fn entry() -> Result<keyring::Entry, String> {
@@ -54,10 +69,16 @@ pub async fn load() -> Option<Account> {
     .await
     .ok()?
     .ok()?;
-    let account: Account = serde_json::from_str(&text).ok()?;
+    let mut account: Account = serde_json::from_str(&text).ok()?;
     let alive =
         auth::expiry(&account.refresh_token).is_none_or(|exp| exp > crate::instance::store::now());
-    alive.then_some(account)
+    if !alive {
+        return None;
+    }
+    if let Some(name) = persona(account.steamid).await {
+        account.persona = Some(name);
+    }
+    Some(account)
 }
 
 /// Saves the account in the OS keyring, or in the private file when there is none.
@@ -206,6 +227,7 @@ async fn login(
                     .await
                     .map_err(fail)?;
                 return Ok(Account {
+                    persona: persona(tokens.steamid).await,
                     name: tokens.account_name,
                     steamid: tokens.steamid,
                     refresh_token: tokens.refresh_token,

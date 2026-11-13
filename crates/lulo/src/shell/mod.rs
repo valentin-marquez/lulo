@@ -318,7 +318,7 @@ impl Shell {
                     dialog
                         .title("Steam account")
                         .w(px(380.))
-                        .child(format!("Signed in as {}.", current.name))
+                        .child(format!("Signed in as {}.", current.display()))
                         .child(
                             div().flex().justify_end().pt_4().child(
                                 crate::ui::FancyButton::new("sign-out", "Sign out")

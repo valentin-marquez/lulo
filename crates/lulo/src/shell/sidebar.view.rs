@@ -139,7 +139,7 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
         .child({
             let account = handle.clone();
             let (name, detail) = match shell.account() {
-                Some(signed_in) => (signed_in.name.clone(), "Steam"),
+                Some(signed_in) => (signed_in.display().to_owned(), "Steam"),
                 None => ("Not signed in".to_owned(), "Sign in to Steam"),
             };
             row("account", false, cx)

@@ -1,6 +1,6 @@
 //! Title bar: logo and what is running.
 
-use gpui_kit::component::{ActiveTheme, TitleBar};
+use gpui_kit::component::{ActiveTheme, Icon, TitleBar};
 use gpui_kit::*;
 
 use crate::assets::LOGO;
@@ -65,16 +65,16 @@ impl Topbar {
             .border_color(theme.border)
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(
-                div()
-                    .size(px(6.))
-                    .rounded_full()
-                    .bg(if self.running.is_some() {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground
-                    }),
-            )
+            .child(match self.running {
+                Some(_) => Icon::empty()
+                    .path("icons/gamepad.svg")
+                    .size_4()
+                    .text_color(theme.primary),
+                None => Icon::empty()
+                    .path("icons/moon-sleep.svg")
+                    .size_4()
+                    .text_color(theme.muted_foreground),
+            })
             .child(match &self.running {
                 Some(name) => format!("Running {name}"),
                 None => "Nothing running".into(),

@@ -95,6 +95,44 @@ async fn starts_a_qr_login() {
     ));
 }
 
+/// A public Project Zomboid collection (82 mods when this was written; if its author removes
+/// it, any other public one works), and a plain mod, which is not one.
+const COLLECTION: u64 = 3834236342;
+const PLAIN_MOD: u64 = 3832274571;
+
+#[tokio::test]
+#[ignore = "needs network access to Steam"]
+async fn resolves_a_workshop_collection_into_its_mods() {
+    let http = steam::http();
+    let mut client = steam::Client::anonymous(&http)
+        .await
+        .expect("anonymous logon");
+    let collection = steam::workshop::collection(&mut client, COLLECTION)
+        .await
+        .expect("a public collection resolves");
+    eprintln!("{}: {} mods", collection.title, collection.mods.len());
+    assert!(!collection.title.is_empty());
+    assert!(!collection.mods.is_empty(), "{collection:?}");
+    let mut ids: Vec<_> = collection.mods.iter().map(|m| m.id).collect();
+    ids.sort_unstable();
+    let count = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), count, "every mod is listed once");
+    assert!(
+        collection
+            .mods
+            .iter()
+            .all(|m| m.app == PROJECT_ZOMBOID && !m.title.is_empty() && m.manifest != 0),
+        "mods have what a download needs"
+    );
+
+    let not = steam::workshop::collection(&mut client, PLAIN_MOD).await;
+    assert!(
+        matches!(not, Err(steam::Error::NotCollection)),
+        "a mod is not a collection: {not:?}"
+    );
+}
+
 /// A made-up account still gets an RSA key, and a wrong password is refused with EResult 5.
 #[tokio::test]
 #[ignore = "needs network access to Steam"]

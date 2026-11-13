@@ -246,6 +246,9 @@ pub struct ContentManifestMetadata {
 pub struct CPublishedFileGetDetailsRequest {
     #[prost(fixed64, repeated, packed = "false", tag = "1")]
     pub publishedfileids: Vec<u64>,
+    /// Asks for the items a collection holds, or the ones a mod requires.
+    #[prost(bool, optional, tag = "4")]
+    pub includechildren: Option<bool>,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -256,6 +259,9 @@ pub struct CPublishedFileGetDetailsResponse {
 
 #[derive(Clone, PartialEq, Message)]
 pub struct PublishedFileDetails {
+    /// EResult of the lookup; 1 is OK, anything else is an item that is gone or private.
+    #[prost(uint32, optional, tag = "1")]
+    pub result: Option<u32>,
     #[prost(uint64, optional, tag = "2")]
     pub publishedfileid: Option<u64>,
     #[prost(uint32, optional, tag = "5")]
@@ -270,6 +276,19 @@ pub struct PublishedFileDetails {
     pub title: Option<String>,
     #[prost(uint32, optional, tag = "20")]
     pub time_updated: Option<u32>,
+    /// EWorkshopFileType: a collection is not a mod.
+    #[prost(uint32, optional, tag = "34")]
+    pub file_type: Option<u32>,
+    #[prost(message, repeated, tag = "53")]
+    pub children: Vec<PublishedFileChild>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PublishedFileChild {
+    #[prost(uint64, optional, tag = "1")]
+    pub publishedfileid: Option<u64>,
+    #[prost(uint32, optional, tag = "2")]
+    pub sortorder: Option<u32>,
 }
 
 // Authentication (user login)

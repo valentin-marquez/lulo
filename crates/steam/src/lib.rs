@@ -39,6 +39,8 @@ pub enum Error {
     NoServers,
     #[error("{0} is larger than allowed")]
     TooLarge(&'static str),
+    #[error("that is not a Workshop collection, or it is private")]
+    NotCollection,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;

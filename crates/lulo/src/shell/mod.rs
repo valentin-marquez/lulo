@@ -16,13 +16,14 @@ use gpui_kit::*;
 
 use crate::account::{self, Account};
 use crate::instance::{self, Instance, Status, detail::Detail, install, launch, store};
+use crate::library::Library;
+use crate::screenshots;
 use crate::ui::Loader;
-use crate::{home, screenshots};
 use topbar::Topbar;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Page {
-    Home,
+    Library,
     Screenshots,
     Instance(usize),
 }
@@ -32,6 +33,8 @@ pub struct Shell {
     instances: Vec<Instance>,
     page: Page,
     detail: Option<Entity<Detail>>,
+    /// Made on first view; it needs a window for its search field.
+    library: Option<Entity<Library>>,
     account: Option<Account>,
     /// Newest Steam build id per branch name; empty until the first check succeeds.
     latest: HashMap<SharedString, u32>,
@@ -63,8 +66,9 @@ impl Shell {
             running: HashMap::new(),
             instances: store::list(&root),
             root,
-            page: Page::Home,
+            page: Page::Library,
             detail: None,
+            library: None,
             loading: false,
         };
         shell.check_builds(cx);
@@ -213,6 +217,7 @@ impl Shell {
                         .child(
                             Button::new("cancel-update")
                                 .outline()
+                                .cursor_pointer()
                                 .label("Cancel")
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
@@ -350,6 +355,9 @@ impl Shell {
         if let Some(detail) = &self.detail {
             detail.update(cx, |_, cx| cx.notify());
         }
+        if let Some(library) = &self.library {
+            library.update(cx, |_, cx| cx.notify());
+        }
         cx.notify();
     }
 
@@ -415,7 +423,7 @@ impl Shell {
                 let _ = shell.update(cx, |shell, cx| {
                     shell.instances = store::list(&shell.root);
                     let ix = shell.instances.iter().position(|i| i.id == created.id);
-                    shell.go(ix.map_or(Page::Home, Page::Instance), cx);
+                    shell.go(ix.map_or(Page::Library, Page::Instance), cx);
                 });
             },
             window,
@@ -425,11 +433,17 @@ impl Shell {
 }
 
 impl Render for Shell {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = match (self.page, &self.detail) {
             (Page::Instance(_), Some(detail)) => detail.clone().into_any_element(),
             (Page::Screenshots, _) => screenshots::render().into_any_element(),
-            _ => home::render(self, cx).into_any_element(),
+            _ => {
+                let shell = cx.entity().downgrade();
+                self.library
+                    .get_or_insert_with(|| cx.new(|cx| Library::new(shell, window, cx)))
+                    .clone()
+                    .into_any_element()
+            }
         };
 
         div()

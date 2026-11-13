@@ -78,7 +78,7 @@ fn nav(
 
 pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
     let handle = cx.entity().downgrade();
-    let home = nav(Page::Home, IconName::House, "Home", shell, cx);
+    let home = nav(Page::Library, IconName::Library, "Library", shell, cx);
     let screenshots = nav(Page::Screenshots, IconName::Image, "Screenshots", shell, cx);
     let theme = cx.theme();
 

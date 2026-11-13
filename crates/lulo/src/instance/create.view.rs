@@ -50,7 +50,8 @@ pub fn open(
         let dialog = dialog.entrance(DialogEntrance::FadeSlide);
         dialog
             .title("Create instance")
-            .w(px(560.))
+            .centered()
+            .w(px(680.))
             .child(view.clone())
     });
 }

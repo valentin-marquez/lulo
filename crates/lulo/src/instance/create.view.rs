@@ -51,7 +51,7 @@ pub fn open(
         dialog
             .title("Create instance")
             .centered()
-            .w(px(680.))
+            .w(px(620.))
             .child(view.clone())
     });
 }
@@ -206,7 +206,7 @@ impl Create {
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
             .children(options.into_iter().enumerate().map(
                 |(ix, (step, icon, title, line, enabled))| {
                     option(ix, icon, title, line, enabled, cx).when(enabled, |this| {
@@ -542,7 +542,7 @@ fn option(
         .flex()
         .items_center()
         .gap_3()
-        .p_3()
+        .p_4()
         .rounded(theme.radius_lg)
         .bg(theme.group_box)
         .border_1()

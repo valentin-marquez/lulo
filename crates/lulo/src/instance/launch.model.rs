@@ -39,6 +39,18 @@ pub fn command(instance: &Instance) -> io::Result<Command> {
         }
         Command::new(exe)
     };
+    // The launcher takes Java VM options first, closed by `--`; a later `-Xmx` wins, so one
+    // typed by hand overrides the memory setting. Both builds accept this on the command line
+    // (checked with `jcmd VM.flags`), so the shared build's `ProjectZomboid64.json` stays as is.
+    let mut jvm: Vec<String> = instance
+        .memory_gb
+        .map(|gb| format!("-Xmx{gb}g"))
+        .into_iter()
+        .collect();
+    jvm.extend(split_args(&instance.jvm_args));
+    if !jvm.is_empty() {
+        command.args(jvm).arg("--");
+    }
     // Before `-cachedir`, so lulo's own folder wins if the user types one too.
     command
         .args(split_args(&instance.launch_args))
@@ -81,7 +93,7 @@ fn split_args(text: &str) -> Vec<String> {
 // ponytail: the game's output is dropped; the Logs tab (#16) will read it.
 pub fn start(instance: &Instance) -> io::Result<Child> {
     // The game ships with `-Dzomboid.steam=1` and quits silently when SteamAPI_Init fails.
-    if !running(STEAM) {
+    if !steam_running() {
         return Err(io::Error::other(
             "Steam isn't open. Open Steam and press Play again",
         ));
@@ -92,6 +104,11 @@ pub fn start(instance: &Instance) -> io::Result<Child> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
+}
+
+/// Whether the Steam client is open.
+pub fn steam_running() -> bool {
+    running(STEAM)
 }
 
 const STEAM: &str = if cfg!(windows) {
@@ -169,6 +186,8 @@ mod tests {
             build: Some(1),
             last_played: None,
             icon: None,
+            memory_gb: Some(8),
+            jvm_args: "-XX:+AlwaysPreTouch".into(),
             launch_args: "-debug".into(),
         };
         assert!(command(&instance).is_err(), "no game files yet");
@@ -187,6 +206,9 @@ mod tests {
         assert_eq!(
             args,
             [
+                "-Xmx8g".to_owned(),
+                "-XX:+AlwaysPreTouch".to_owned(),
+                "--".to_owned(),
                 "-debug".to_owned(),
                 format!("-cachedir={}", dir.join("zomboid").display())
             ]

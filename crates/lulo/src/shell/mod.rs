@@ -145,7 +145,6 @@ impl Shell {
             return;
         };
         let Some(instance) = instance else { return };
-        use gpui_kit::component::WindowExt;
         let status = shell
             .read_with(cx, |shell, _| shell.status(&instance))
             .unwrap_or(Status::Ready);
@@ -157,11 +156,22 @@ impl Shell {
                     }
                 });
             }
+            // The game quits silently without Steam, so say so and offer to open it.
+            (Status::Ready | Status::Outdated, _) if !launch::steam_running() => {
+                use gpui_kit::component::WindowExt;
+                window.push_notification(crate::ui::toast::steam_closed(), cx);
+            }
             (Status::Ready | Status::Outdated, _) => match launch::start(&instance) {
                 Ok(child) => {
                     let _ = shell.update(cx, |shell, cx| shell.watch(instance, child, cx));
                 }
-                Err(err) => window.push_notification(format!("Couldn't start the game: {err}"), cx),
+                Err(err) => {
+                    use gpui_kit::component::WindowExt;
+                    window.push_notification(
+                        crate::ui::toast::failed_because("The game refused to start", err),
+                        cx,
+                    )
+                }
             },
             (Status::Installing(_), _) => {
                 let _ = shell.update(cx, |shell, cx| shell.cancel(&instance.id, cx));
@@ -182,7 +192,6 @@ impl Shell {
         cx: &mut App,
     ) {
         use gpui_kit::component::WindowExt;
-        use gpui_kit::component::button::Button;
         let Ok((instance, account)) = shell.read_with(cx, |shell, _| {
             let instance = shell.instances.iter().find(|i| i.id == id).cloned();
             (
@@ -218,10 +227,7 @@ impl Shell {
                         .gap_2()
                         .pt_4()
                         .child(
-                            Button::new("cancel-update")
-                                .outline()
-                                .cursor_pointer()
-                                .label("Cancel")
+                            crate::ui::secondary("cancel-update", "Cancel")
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
@@ -317,7 +323,10 @@ impl Shell {
                         // The window that started the install, not whichever has focus now.
                         let _ = window.update(cx, |_, window, cx| {
                             use gpui_kit::component::WindowExt;
-                            window.push_notification(format!("Install failed: {err}"), cx);
+                            window.push_notification(
+                                crate::ui::toast::failed_because("Yikes, the install tripped", err),
+                                cx,
+                            );
                         });
                     }
                 });
@@ -341,8 +350,147 @@ impl Shell {
         }
     }
 
+    /// Shows the page of instance `id`.
+    pub fn view(shell: WeakEntity<Shell>, id: SharedString, _: &mut Window, cx: &mut App) {
+        let _ = shell.update(cx, |shell, cx| {
+            if let Some(ix) = shell.instances.iter().position(|i| i.id == id) {
+                shell.go(Page::Instance(ix), cx);
+            }
+        });
+    }
+
+    /// Opens the settings dialog of instance `id`.
+    pub fn settings(shell: WeakEntity<Shell>, id: SharedString, window: &mut Window, cx: &mut App) {
+        Self::settings_at(shell, id, instance::settings::Section::General, window, cx);
+    }
+
+    /// Opens the settings dialog of instance `id` on its picture.
+    pub fn customize(
+        shell: WeakEntity<Shell>,
+        id: SharedString,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        Self::settings_at(
+            shell,
+            id,
+            instance::settings::Section::Customize,
+            window,
+            cx,
+        );
+    }
+
+    fn settings_at(
+        shell: WeakEntity<Shell>,
+        id: SharedString,
+        section: instance::settings::Section,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Ok(Some(instance)) = shell.read_with(cx, |shell, _| {
+            shell.instances.iter().find(|i| i.id == id).cloned()
+        }) else {
+            return;
+        };
+        instance::settings::open(instance, section, shell, window, cx);
+    }
+
+    /// Asks before deleting instance `id`: its saves and mods go with it.
+    pub fn confirm_delete(
+        shell: WeakEntity<Shell>,
+        id: SharedString,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        use gpui_kit::component::WindowExt;
+        let Ok(Some(name)) = shell.read_with(cx, |shell, _| {
+            let instance = shell.instances.iter().find(|i| i.id == id);
+            instance.map(|i| i.name.clone())
+        }) else {
+            return;
+        };
+        window.open_dialog(cx, move |dialog, _, _| {
+            // Fades in settling from just above, and back out (the default drops from the window top).
+            let dialog = dialog.entrance(DialogEntrance::FadeSlide);
+            let (shell, id) = (shell.clone(), id.clone());
+            dialog
+                .title(format!("Delete {name}?"))
+                .w(px(420.))
+                .child("Its saves, mods and settings are deleted for good.")
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .pt_4()
+                        .child(
+                            crate::ui::secondary("cancel-delete", "Keep")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            crate::ui::FancyButton::new("confirm-delete", "Delete")
+                                .small()
+                                .danger()
+                                .icon(gpui_kit::assets::IconName::Trash)
+                                .on_click(move |_, window, cx| {
+                                    // The instance's settings dialog may be open under this one.
+                                    window.close_all_dialogs(cx);
+                                    if let Ok(Err(why)) =
+                                        shell.update(cx, |shell, cx| shell.remove(&id, window, cx))
+                                    {
+                                        window.push_notification(crate::ui::toast::failed(why), cx);
+                                    }
+                                }),
+                        ),
+                )
+        });
+    }
+
+    /// Deletes instance `id` with its saves and mods, and goes back to the Library. Refused
+    /// while the game runs or an install writes into it. The instance leaves the list at once;
+    /// its files (gigabytes, with an own game copy) go in the background.
+    pub fn remove(
+        &mut self,
+        id: &SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        use gpui_kit::component::WindowExt;
+        if self.running.contains_key(id) || self.installs.contains_key(id) {
+            return Err("Whoa! Stop the game before deleting it".into());
+        }
+        let Some(ix) = self.instances.iter().position(|i| i.id == *id) else {
+            return Ok(());
+        };
+        let instance = self.instances.remove(ix);
+        self.page = Page::Library;
+        self.changed(cx);
+        let name = instance.name.clone();
+        window.push_notification(
+            crate::ui::toast::working(format!("Sweeping away {name}")),
+            cx,
+        );
+        let (root, handle) = (self.root.clone(), window.window_handle());
+        cx.spawn(async move |this, cx| {
+            let deleted = crate::runtime::blocking(move || {
+                store::delete(&root, &instance.dir).map_err(|err| err.to_string())
+            })
+            .await
+            .and_then(|result| result);
+            // Whatever happened, show what is on disk now.
+            let _ = this.update(cx, |shell, cx| shell.reload(cx));
+            let toast = match deleted {
+                Ok(()) => crate::ui::toast::done(format!("Poof! {name} is gone")),
+                Err(err) => crate::ui::toast::failed_because("That instance wouldn't budge", err),
+            };
+            let _ = handle.update(cx, |_, window, cx| window.push_notification(toast, cx));
+        })
+        .detach();
+        Ok(())
+    }
+
     /// Re-reads instances from disk, keeping the current page.
-    fn reload(&mut self, cx: &mut Context<Self>) {
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.instances = store::list(&self.root);
         if let (Page::Instance(_), Some(detail)) = (self.page, &self.detail) {
             let shown = detail.read(cx).id();
@@ -400,19 +548,22 @@ impl Shell {
         .detach();
     }
 
-    /// Opens the create dialog; a created instance is listed and selected.
+    /// Opens the create dialog; a created instance is listed, selected and installed.
     pub fn create(shell: WeakEntity<Shell>, window: &mut Window, cx: &mut App) {
         let Ok(root) = shell.read_with(cx, |shell, _| shell.root.clone()) else {
             return;
         };
         instance::create::open(
             root,
-            move |created, _, cx| {
+            move |created, window, cx| {
                 let _ = shell.update(cx, |shell, cx| {
                     shell.instances = store::list(&shell.root);
                     let ix = shell.instances.iter().position(|i| i.id == created.id);
                     shell.go(ix.map_or(Page::Library, Page::Instance), cx);
                 });
+                // A new instance has nothing to run yet: start its install right away, as its
+                // main button would (it asks to sign in to Steam first when nobody is).
+                Shell::play(shell.clone(), created.id.clone(), window, cx);
             },
             window,
             cx,

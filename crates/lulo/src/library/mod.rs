@@ -6,14 +6,14 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::spring;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::instance::{Instance, Status};
-use crate::shell::{Page, Shell};
+use crate::shell::Shell;
 use crate::ui::{self, Empty, FancyButton, SPRING_FAST, SPRING_PRESS};
 
 /// Card width; the art inside is square.
@@ -288,6 +288,7 @@ fn card(
     );
     let (inset_x, inset_y) = (px(CARD * 0.01 * press), px((ART + 72.) * 0.01 * press));
     let (action, icon, enabled) = status.action();
+    let menu_action = action.clone();
     // Running and installing keep their button up: it is how you stop them.
     let reveal = match status {
         Status::Running | Status::Installing(_) => 1.,
@@ -330,9 +331,6 @@ fn card(
                 .child(badge(instance.branch.clone())),
         )
         .children(state.map(|state| div().absolute().top_2().left_2().child(state)))
-        .when_some(crate::instance::bar(&id, status, cx), |this, bar| {
-            this.child(div().absolute().bottom_2().left_2().right_2().child(bar))
-        })
         .when(reveal > 0.01 && enabled, |this| {
             let (shell, id) = (shell.clone(), id.clone());
             // Grows from its center (28 to 40 px, icon with it) as it fades in: the scale
@@ -429,13 +427,7 @@ fn card(
         )
         .on_click({
             let (shell, id) = (shell.clone(), id.clone());
-            move |_, _, cx| {
-                let _ = shell.update(cx, |shell, cx| {
-                    if let Some(ix) = shell.instances().iter().position(|i| i.id == id) {
-                        shell.go(Page::Instance(ix), cx);
-                    }
-                });
-            }
+            move |_, window, cx| Shell::view(shell.clone(), id.clone(), window, cx)
         })
         .child(art)
         .child(
@@ -451,14 +443,67 @@ fn card(
                         .truncate()
                         .child(instance.name.clone()),
                 )
-                .child(
-                    div()
+                // While it downloads, the progress takes the line that says when it was played:
+                // on the art it sat under the cancel button, orange on the art's own colors.
+                .child(match crate::instance::bar(&id, status, cx) {
+                    Some(bar) => div()
+                        .h_4()
+                        .flex()
+                        .items_center()
+                        .child(div().w_full().child(bar)),
+                    None => div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .truncate()
                         .child(instance.played()),
-                ),
+                }),
         )
+        // Right click: what the card and the instance page offer, without opening it.
+        .context_menu({
+            let dir = instance.dir.clone();
+            move |menu, _, _| {
+                let item = |label: &str, icon: IconName| {
+                    PopupMenuItem::new(SharedString::from(label.to_owned())).icon(icon)
+                };
+                let on = |run: fn(WeakEntity<Shell>, SharedString, &mut Window, &mut App)| {
+                    let (shell, id) = (shell.clone(), id.clone());
+                    move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                        run(shell.clone(), id.clone(), window, cx)
+                    }
+                };
+                let (folder, path) = (dir.clone(), dir.to_string_lossy().into_owned());
+                // The main action stands out in the accent, as on the card and the page.
+                let (label, accent) = (SharedString::from(menu_action.clone()), theme.primary);
+                let play = PopupMenuItem::element(move |_, _| {
+                    div()
+                        .text_color(accent)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(label.clone())
+                })
+                .icon(Icon::new(icon).text_color(accent));
+                menu.item(play.on_click(on(Shell::play)))
+                    .separator()
+                    .item(item("View instance", IconName::Eye).on_click(on(Shell::view)))
+                    .item(
+                        item("Open folder", IconName::FolderOpen)
+                            .on_click(move |_, _, cx| cx.open_with_system(&folder)),
+                    )
+                    .item(
+                        item("Copy path", IconName::Copy).on_click(move |_, window, cx| {
+                            use gpui_kit::component::WindowExt;
+                            cx.write_to_clipboard(ClipboardItem::new_string(path.clone()));
+                            window.push_notification(
+                                ui::toast::done("Copied! Paste it anywhere"),
+                                cx,
+                            );
+                        }),
+                    )
+                    .item(item("Edit icon", IconName::Palette).on_click(on(Shell::customize)))
+                    .item(item("Settings", IconName::Settings).on_click(on(Shell::settings)))
+                    .separator()
+                    .item(item("Delete", IconName::Trash).on_click(on(Shell::confirm_delete)))
+            }
+        })
         .into_any_element()
 }
 
@@ -534,5 +579,19 @@ impl Render for Library {
             )
             .child(self.toolbar(window, cx))
             .child(body)
+            // Right click on the page itself; a card's own menu wins over this one.
+            .context_menu(move |menu, _, _| {
+                let (create, folder) = (handle.clone(), crate::instance::store::root());
+                menu.item(
+                    PopupMenuItem::new("New instance")
+                        .icon(IconName::Plus)
+                        .on_click(move |_, window, cx| Shell::create(create.clone(), window, cx)),
+                )
+                .item(
+                    PopupMenuItem::new("Open instances folder")
+                        .icon(IconName::FolderOpen)
+                        .on_click(move |_, _, cx| cx.open_with_system(&folder)),
+                )
+            })
     }
 }

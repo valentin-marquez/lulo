@@ -130,14 +130,18 @@ impl Detail {
                     )
                     .children(super::bar(&instance.id, status, cx)),
             )
-            .child(
+            .child({
+                let (shell, id) = (self.shell.clone(), instance.id.clone());
                 Button::new("settings")
                     .outline()
                     .cursor_pointer()
                     .icon(IconName::Settings)
                     .size(px(40.))
-                    .rounded(px(10.)),
-            )
+                    .rounded(px(10.))
+                    .on_click(move |_, window, cx| {
+                        Shell::settings(shell.clone(), id.clone(), window, cx)
+                    })
+            })
             .when(status == Status::Outdated, |this| {
                 let (shell, id) = (self.shell.clone(), instance.id.clone());
                 this.child(

@@ -47,6 +47,7 @@
         "sidebar.primary.foreground": "#ffffff",
         "success.background": "#65a30d",
         "warning.background": "#fab202",
+        "info.background": "#f85303",
         "danger.background": "#de290f"
       }
     },
@@ -95,6 +96,7 @@
         "sidebar.primary.foreground": "#ffffff",
         "success.background": "#84cc16",
         "warning.background": "#fab202",
+        "info.background": "#f85303",
         "danger.background": "#ef4444"
       }
     }

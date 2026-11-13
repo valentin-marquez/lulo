@@ -18,6 +18,10 @@ pub mod launch;
 pub mod logs;
 #[path = "logs.view.rs"]
 mod logs_view;
+#[path = "picture.view.rs"]
+pub mod picture;
+#[path = "settings.view.rs"]
+pub mod settings;
 #[path = "store.model.rs"]
 pub mod store;
 
@@ -47,8 +51,40 @@ pub struct Instance {
     pub last_played: Option<u64>,
     /// Chosen icon; `None` shows the one picked from the id.
     pub icon: Option<Icon>,
+    /// Most memory the game may use, in GB; `None` leaves the game's own default.
+    pub memory_gb: Option<u32>,
+    /// Extra arguments for the Java VM, as typed; empty for none.
+    pub jvm_args: String,
     /// Extra arguments for the game, as typed; empty for none.
     pub launch_args: String,
+}
+
+/// Names offered for a new instance, so they don't all start as "New instance".
+const NAMES: [&str; 16] = [
+    "Last Can of Beans",
+    "Boarded Windows",
+    "One More Day",
+    "Canned Soup Club",
+    "Rooftop Garden",
+    "Sledgehammer Days",
+    "Generator Hum",
+    "Rainy Season",
+    "Borrowed Time",
+    "Cabin in the Woods",
+    "Empty Highway",
+    "Lights Out",
+    "Second Winter",
+    "Good Neighbors",
+    "Burnt Stew",
+    "Foraging Trip",
+];
+
+/// A name for a new instance, a different one most times it is asked.
+pub fn suggest() -> &'static str {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    NAMES[now.subsec_nanos() as usize % NAMES.len()]
 }
 
 /// An instance's picture, stored in its `instance.json`.
@@ -231,6 +267,8 @@ mod tests {
             build,
             last_played: None,
             icon: None,
+            memory_gb: None,
+            jvm_args: String::new(),
             launch_args: String::new(),
         }
     }

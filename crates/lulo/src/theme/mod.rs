@@ -59,6 +59,11 @@ pub fn init(cx: &mut App) {
     Theme::update(cx, |theme| {
         theme.light_theme = light;
         theme.dark_theme = dark;
+        // Toasts sit at the bottom center, out of the way of the title bar and its downloads.
+        theme.notification.placement = Anchor::BottomCenter;
+        // The widest a toast gets; shorter messages hug their text.
+        theme.notification.width = px(420.);
+        theme.notification.margins.bottom = px(24.);
     });
     Theme::change(cx.window_appearance(), None, cx);
 }

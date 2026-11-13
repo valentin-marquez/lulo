@@ -25,6 +25,10 @@ struct Manifest {
     created: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     icon: Option<Icon>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory_gb: Option<u32>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    jvm_args: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     launch_args: String,
 }
@@ -145,6 +149,8 @@ pub fn create(root: &Path, name: &str, branch: &str) -> io::Result<Instance> {
         last_played: None,
         created: now(),
         icon: None,
+        memory_gb: None,
+        jvm_args: String::new(),
         launch_args: String::new(),
     };
     write(&dir, &manifest)?;
@@ -167,13 +173,20 @@ pub fn set_icon(dir: &Path, icon: Option<Icon>) -> io::Result<()> {
     write(dir, &manifest)
 }
 
-/// Renames the instance. Its folder keeps the old id, which other things refer to.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance settings view (#17) will call it")
-)]
-pub fn rename(dir: &Path, name: &str) -> io::Result<()> {
-    let name = name.trim();
+/// What the instance settings dialog edits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settings {
+    pub name: String,
+    /// Most memory the game may use, in GB; `None` leaves the game's own default.
+    pub memory_gb: Option<u32>,
+    pub jvm_args: String,
+    pub launch_args: String,
+}
+
+/// Saves the instance's settings. Renaming keeps the folder and its id, which other things
+/// refer to.
+pub fn configure(dir: &Path, settings: &Settings) -> io::Result<()> {
+    let name = settings.name.trim();
     if name.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -183,14 +196,13 @@ pub fn rename(dir: &Path, name: &str) -> io::Result<()> {
     let path = dir.join(FILE);
     let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
     manifest.name = name.to_owned();
+    manifest.memory_gb = settings.memory_gb;
+    manifest.jvm_args = settings.jvm_args.trim().to_owned();
+    manifest.launch_args = settings.launch_args.trim().to_owned();
     write(dir, &manifest)
 }
 
 /// Deletes the instance with its saves and mods, and any shared build nothing else runs.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance settings view (#17) will call it")
-)]
 pub fn delete(root: &Path, dir: &Path) -> io::Result<()> {
     // Only an instance folder directly under the root: never an arbitrary path.
     if dir.parent() != Some(root) || !dir.join(FILE).is_file() {
@@ -199,20 +211,11 @@ pub fn delete(root: &Path, dir: &Path) -> io::Result<()> {
             "not an instance folder",
         ));
     }
+    // The manifest goes first: from then on the instance is no longer listed, however long
+    // the rest takes or if it is cut short.
+    std::fs::remove_file(dir.join(FILE))?;
     std::fs::remove_dir_all(dir)?;
     prune(root)
-}
-
-/// Records the extra arguments the game starts with.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance settings view (#17) will call it")
-)]
-pub fn set_launch_args(dir: &Path, args: &str) -> io::Result<()> {
-    let path = dir.join(FILE);
-    let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-    manifest.launch_args = args.trim().to_owned();
-    write(dir, &manifest)
 }
 
 /// Records that the instance was just played.
@@ -239,6 +242,8 @@ fn instance(id: String, dir: PathBuf, m: &Manifest) -> Instance {
         build: m.build,
         last_played: m.last_played,
         icon: m.icon.clone(),
+        memory_gb: m.memory_gb,
+        jvm_args: m.jvm_args.clone(),
         launch_args: m.launch_args.clone(),
     }
 }
@@ -344,40 +349,42 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_launch_arguments() {
-        let root = temp_root("args");
-        let a = create(&root, "A", "public").unwrap();
-        assert_eq!(list(&root)[0].launch_args, "");
-        assert!(
-            !std::fs::read_to_string(a.dir.join(FILE))
-                .unwrap()
-                .contains("launch_args")
-        );
-
-        set_launch_args(&a.dir, "  -debug -nosteam  ").unwrap();
-        assert_eq!(list(&root)[0].launch_args, "-debug -nosteam");
-        set_launch_args(&a.dir, "").unwrap();
-        assert!(
-            !std::fs::read_to_string(a.dir.join(FILE))
-                .unwrap()
-                .contains("launch_args")
-        );
-
-        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn renames_keeping_the_folder() {
-        let root = temp_root("rename");
+    fn saves_the_settings_keeping_the_folder() {
+        let root = temp_root("configure");
         let a = create(&root, "Old name", "public").unwrap();
+        let plain = std::fs::read_to_string(a.dir.join(FILE)).unwrap();
+        assert!(!plain.contains("launch_args") && !plain.contains("memory_gb"));
 
-        rename(&a.dir, "  New name ").unwrap();
+        let mut settings = Settings {
+            name: "  New name ".into(),
+            memory_gb: Some(8),
+            jvm_args: " -XX:+AlwaysPreTouch ".into(),
+            launch_args: "  -debug -nosteam  ".into(),
+        };
+        configure(&a.dir, &settings).unwrap();
         let listed = list(&root);
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].name.as_ref(), "New name");
         assert_eq!(listed[0].id, a.id);
-        assert!(rename(&a.dir, "   ").is_err());
+        assert_eq!(listed[0].name.as_ref(), "New name");
+        assert_eq!(listed[0].memory_gb, Some(8));
+        assert_eq!(listed[0].jvm_args, "-XX:+AlwaysPreTouch");
+        assert_eq!(listed[0].launch_args, "-debug -nosteam");
+
+        settings.name = "   ".into();
+        assert!(configure(&a.dir, &settings).is_err());
         assert_eq!(list(&root)[0].name.as_ref(), "New name");
+
+        // Cleared settings leave the file as a new instance has it.
+        let cleared = Settings {
+            name: "New name".into(),
+            memory_gb: None,
+            jvm_args: String::new(),
+            launch_args: String::new(),
+        };
+        configure(&a.dir, &cleared).unwrap();
+        let text = std::fs::read_to_string(a.dir.join(FILE)).unwrap();
+        assert!(!text.contains("launch_args") && !text.contains("memory_gb"));
+        assert!(!text.contains("jvm_args"));
 
         std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }

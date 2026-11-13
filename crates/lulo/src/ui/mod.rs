@@ -62,6 +62,109 @@ pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
     }
 }
 
+/// A section in a dialog's left navigation (settings, instance settings): icon and label,
+/// tinted with the accent when it is the one shown.
+pub fn nav_item(
+    label: &'static str,
+    icon: gpui_kit::assets::IconName,
+    active: bool,
+    cx: &App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    use gpui_kit::component::Icon;
+    use gpui_kit::prelude::FluentBuilder as _;
+    use gpui_kit::*;
+    let theme = cx.theme();
+    div()
+        .id(label)
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .rounded(theme.radius)
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .when(active, |this| {
+            this.bg(theme.primary.opacity(0.15))
+                .text_color(theme.primary)
+        })
+        .when(!active, |this| {
+            this.text_color(theme.muted_foreground)
+                .hover(|style| style.bg(theme.sidebar_accent))
+        })
+        .child(Icon::new(icon).size_4())
+        .child(label)
+}
+
+/// The quiet button beside a primary one (Cancel, Keep, Back): no fill or border, and the
+/// small `FancyButton`'s height and corners so the two line up.
+pub fn secondary(id: &'static str, label: &'static str) -> gpui_kit::component::button::Button {
+    use gpui_kit::component::button::{Button, ButtonVariants};
+    use gpui_kit::*;
+    Button::new(id)
+        .ghost()
+        .cursor_pointer()
+        .label(label)
+        .h(px(36.))
+        .px_3()
+        .rounded(px(8.))
+}
+
+/// One-shot entrance for content that replaces other content in place (a dialog's section):
+/// fades in rising a few px. `key` changes to replay it.
+pub fn enter(content: gpui_kit::Div, key: &'static str) -> impl gpui_kit::IntoElement {
+    use gpui_kit::*;
+    content.with_animation(
+        key,
+        Animation::new(crate::ui::ENTER).with_easing(crate::ui::ease_out_quint),
+        |content, t| content.relative().top(px(6. * (1. - t))).opacity(t),
+    )
+}
+
+/// Toasts by what they say, each with its own icon. They talk like a friend would, the way
+/// Discord does: short, warm, a little playful, and still saying what happened and what to do.
+pub mod toast {
+    use gpui_kit::SharedString;
+    pub use gpui_kit::component::notification::Notification;
+
+    pub fn done(text: impl Into<SharedString>) -> Notification {
+        Notification::success(text)
+    }
+
+    pub fn failed(text: impl Into<SharedString>) -> Notification {
+        Notification::error(text)
+    }
+
+    /// What failed on the first line, and why (the error itself) under it.
+    pub fn failed_because(what: &'static str, why: impl ToString) -> Notification {
+        Notification::error(why.to_string()).title(what)
+    }
+
+    /// Play was pressed with Steam closed: says so, with a button that opens it.
+    pub fn steam_closed() -> Notification {
+        use gpui_kit::component::button::Button;
+        use gpui_kit::*;
+        Notification::warning("Wake it up, then hit Play again")
+            .title("Oops! Steam is taking a nap")
+            .action(|_, _, cx| {
+                Button::new("open-steam")
+                    .cursor_pointer()
+                    .label("Open Steam")
+                    .on_click(cx.listener(|toast, _, window, cx| {
+                        cx.open_url("steam://open/main");
+                        toast.dismiss(window, cx);
+                    }))
+            })
+            // A toast with a button stays by default; this one is only a reminder.
+            .autohide(true)
+    }
+
+    pub fn working(text: impl Into<SharedString>) -> Notification {
+        Notification::info(text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::mix;

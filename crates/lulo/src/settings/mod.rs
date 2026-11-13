@@ -11,8 +11,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Disableable, Icon};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{ActiveTheme, Disableable};
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
@@ -76,9 +75,9 @@ impl Section {
     }
 }
 
-const WIDTH: f32 = 860.;
-const HEIGHT: f32 = 440.;
-const NAV: f32 = 220.;
+pub const WIDTH: f32 = 860.;
+pub const HEIGHT: f32 = 440.;
+pub const NAV: f32 = 220.;
 /// The height of a theme card's preview.
 const PREVIEW: f32 = 96.;
 /// How far below its place the unsaved-changes bar starts: its height plus margin, so it begins
@@ -228,7 +227,7 @@ fn radio(selected: bool, cx: &App) -> Div {
         .children(selected.then(|| div().size(px(8.)).rounded_full().bg(theme.primary)))
 }
 
-fn heading(title: &'static str, line: &'static str, cx: &App) -> Div {
+pub fn heading(title: &'static str, line: &'static str, cx: &App) -> Div {
     div()
         .flex()
         .flex_col()
@@ -275,7 +274,10 @@ impl Settings {
         use gpui_kit::component::WindowExt;
         if self.draft.startup != self.saved.startup {
             if let Err(err) = startup::set(self.draft.startup) {
-                window.push_notification(format!("Couldn't change that: {err}"), cx);
+                window.push_notification(
+                    crate::ui::toast::failed_because("Hmm, that setting didn't stick", err),
+                    cx,
+                );
                 return;
             }
             self.saved.startup = self.draft.startup;
@@ -375,28 +377,7 @@ impl Settings {
                     .child("DISPLAY"),
             )
             .children(Section::ALL.map(|section| {
-                let active = section == self.section;
-                div()
-                    .id(section.label())
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_2()
-                    .rounded(theme.radius)
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .cursor_pointer()
-                    .when(active, |this| {
-                        this.bg(theme.primary.opacity(0.15))
-                            .text_color(theme.primary)
-                    })
-                    .when(!active, |this| {
-                        this.text_color(theme.muted_foreground)
-                            .hover(|style| style.bg(theme.sidebar_accent))
-                    })
-                    .child(Icon::new(section.icon()).size_4())
-                    .child(section.label())
+                crate::ui::nav_item(section.label(), section.icon(), section == self.section, cx)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.section = section;
                         cx.notify();
@@ -459,15 +440,15 @@ impl Settings {
 
     fn behavior(&self, cx: &mut Context<Self>) -> Div {
         let this = cx.entity();
-        let startup =
-            Switch::new("startup")
-                .checked(self.draft.startup)
-                .on_click(move |&on, _, cx| {
-                    this.update(cx, |this, cx| {
-                        this.draft.startup = on;
-                        cx.notify();
-                    })
-                });
+        let startup = Switch::new("startup")
+            .cursor_pointer()
+            .checked(self.draft.startup)
+            .on_click(move |&on, _, cx| {
+                this.update(cx, |this, cx| {
+                    this.draft.startup = on;
+                    cx.notify();
+                })
+            });
         // Needs a system tray icon, which gpui doesn't have.
         let tray = Switch::new("tray").checked(false).disabled(true);
         div()
@@ -537,7 +518,7 @@ impl Render for Settings {
                             .min_h_0()
                             .p_6()
                             .overflow_y_scroll()
-                            .child(content),
+                            .child(crate::ui::enter(content, self.section.label())),
                     )
                     .children(unsaved),
             )

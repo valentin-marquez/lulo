@@ -3668,6 +3668,7 @@ dependencies = [
  "serde",
  "serde_json",
  "steam",
+ "sysinfo",
  "tokio",
 ]
 

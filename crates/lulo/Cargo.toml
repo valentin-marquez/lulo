@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 gpui-kit.workspace = true
 image.workspace = true
 auto-launch = "0.6"
+sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 
 [lints]
 workspace = true

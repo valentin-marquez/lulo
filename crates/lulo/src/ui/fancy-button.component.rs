@@ -48,6 +48,7 @@ pub struct FancyButton {
     label: SharedString,
     icon: Option<Icon>,
     size: Size,
+    danger: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -60,12 +61,19 @@ impl FancyButton {
             label: label.into(),
             icon: None,
             size: Size::default(),
+            danger: false,
             on_click: None,
         }
     }
 
     pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Filled with the danger color instead of the accent, for actions that destroy something.
+    pub fn danger(mut self) -> Self {
+        self.danger = true;
         self
     }
 
@@ -111,8 +119,11 @@ impl RenderOnce for FancyButton {
         );
         // 1.5% per side of the height, and about that of a typical width.
         let (inset_x, inset_y) = (px(1.8 * press), self.size.height() * (0.015 * press));
-        let accent = cx.theme().primary;
-        let foreground = cx.theme().primary_foreground;
+        let (accent, foreground) = if self.danger {
+            (cx.theme().danger, cx.theme().danger_foreground)
+        } else {
+            (cx.theme().primary, cx.theme().primary_foreground)
+        };
         let radius = self.size.radius();
         div()
             .id(self.id)

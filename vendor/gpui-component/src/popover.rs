@@ -22,8 +22,8 @@ pub(crate) fn init(_: &mut App) {}
 ///
 /// This is shadcn/ui's figure: its popup surfaces carry `animate-in`, whose
 /// duration is 150ms.
-// lulo: 250 ms, transitions.dev's menu dropdown (was 150 ms).
-const DROPDOWN_ENTER_DURATION: Duration = Duration::from_millis(250);
+// lulo: 200 ms, between Modrinth's 125 ms menus and transitions.dev's 250 ms (was 150 ms).
+const DROPDOWN_ENTER_DURATION: Duration = Duration::from_millis(200);
 
 /// Where a dropdown starts out, relative to where it comes to rest.
 ///

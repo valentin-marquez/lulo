@@ -1,14 +1,16 @@
 //! Primary call-to-action button, modelled on AlignUI's FancyButton.
 //!
 //! Accent fill with a 1px accent ring and a soft drop shadow, a white gloss that fades
-//! top to bottom (stronger on hover) and a faint highlight along the top edge.
+//! top to bottom (stronger on hover) and a faint highlight along the top edge. Pressing
+//! shrinks the face to 97% like Modrinth's buttons: GPUI can't scale a subtree, so the fill
+//! layer insets itself while the label stays put (3% of the text is under half a pixel).
 
 use gpui_kit::base::spring;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::SPRING;
+use super::{SPRING, SPRING_PRESS};
 
 #[derive(Clone, Copy, Default)]
 pub enum Size {
@@ -95,6 +97,20 @@ impl RenderOnce for FancyButton {
             window,
             cx,
         );
+        let pressed = window.use_keyed_state(
+            SharedString::from(format!("fancy-pressed-{}", self.id)),
+            cx,
+            |_, _| false,
+        );
+        let press: f32 = spring(
+            SharedString::from(format!("fancy-press-{}", self.id)),
+            if *pressed.read(cx) { 1. } else { 0. },
+            SPRING_PRESS,
+            window,
+            cx,
+        );
+        // 1.5% per side of the height, and about that of a typical width.
+        let (inset_x, inset_y) = (px(1.8 * press), self.size.height() * (0.015 * press));
         let accent = cx.theme().primary;
         let foreground = cx.theme().primary_foreground;
         let radius = self.size.radius();
@@ -108,53 +124,82 @@ impl RenderOnce for FancyButton {
             .gap_2()
             .h(self.size.height())
             .px(self.size.padding())
-            .rounded(radius)
-            .bg(accent)
             .text_color(foreground)
             .text_sm()
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
-            .shadow(vec![
-                BoxShadow {
-                    color: accent,
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(1.),
-                    inset: false,
-                },
-                BoxShadow {
-                    color: hsla(220. / 360., 0.32, 0.08, 0.24),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(2.),
-                    spread_radius: px(0.),
-                    inset: false,
-                },
-            ])
             .on_hover(move |is_hovered, window, cx| {
                 hovered.update(cx, |h, _| *h = *is_hovered);
                 window.refresh();
             })
-            // Gloss: white fading to transparent, 16% at rest and 24% on hover, on a spring.
+            .on_mouse_down(MouseButton::Left, {
+                let pressed = pressed.clone();
+                move |_, window, cx| {
+                    pressed.update(cx, |p, _| *p = true);
+                    window.refresh();
+                }
+            })
+            .on_mouse_up(MouseButton::Left, {
+                let pressed = pressed.clone();
+                move |_, window, cx| {
+                    pressed.update(cx, |p, _| *p = false);
+                    window.refresh();
+                }
+            })
+            .on_mouse_up_out(MouseButton::Left, move |_, window, cx| {
+                pressed.update(cx, |p, _| *p = false);
+                window.refresh();
+            })
+            // The face: fill, ring, shadow, gloss and highlight, inset while pressed.
             .child(
                 div()
                     .absolute()
-                    .inset_0()
+                    .top(inset_y)
+                    .bottom(inset_y)
+                    .left(inset_x)
+                    .right(inset_x)
                     .rounded(radius)
-                    .bg(linear_gradient(
-                        180.,
-                        linear_color_stop(white(), 0.),
-                        linear_color_stop(white().opacity(0.), 1.),
-                    ))
-                    .opacity(gloss),
-            )
-            // ponytail: AlignUI masks a 1px gradient ring; a top border is the visible part of it.
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(radius)
-                    .border_t_1()
-                    .border_color(white().opacity(0.12)),
+                    .bg(accent)
+                    .shadow(vec![
+                        BoxShadow {
+                            color: accent,
+                            offset: point(px(0.), px(0.)),
+                            blur_radius: px(0.),
+                            spread_radius: px(1.),
+                            inset: false,
+                        },
+                        // The drop shadow goes as the face sinks.
+                        BoxShadow {
+                            color: hsla(220. / 360., 0.32, 0.08, 0.24 * (1. - press)),
+                            offset: point(px(0.), px(1.)),
+                            blur_radius: px(2.),
+                            spread_radius: px(0.),
+                            inset: false,
+                        },
+                    ])
+                    // Gloss: white fading to transparent, 16% at rest and 24% on hover.
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(radius)
+                            .bg(linear_gradient(
+                                180.,
+                                linear_color_stop(white(), 0.),
+                                linear_color_stop(white().opacity(0.), 1.),
+                            ))
+                            .opacity(gloss * (1. - press)),
+                    )
+                    // ponytail: AlignUI masks a 1px gradient ring; a top border is the
+                    // visible part of it.
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .rounded(radius)
+                            .border_t_1()
+                            .border_color(white().opacity(0.12)),
+                    ),
             )
             .children(
                 self.icon

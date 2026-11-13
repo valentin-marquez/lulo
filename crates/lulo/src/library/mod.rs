@@ -14,7 +14,7 @@ use gpui_kit::*;
 
 use crate::instance::{Instance, Status};
 use crate::shell::{Page, Shell};
-use crate::ui::{Empty, FancyButton, SPRING};
+use crate::ui::{self, Empty, FancyButton, SPRING, SPRING_FAST, SPRING_PRESS};
 
 /// Card width; the art inside is square.
 const CARD: f32 = 176.;
@@ -273,6 +273,28 @@ fn card(
         window,
         cx,
     );
+    // The surface answers the pointer faster than the play button fades in.
+    let surface: f32 = spring(
+        SharedString::from(format!("card-surface-{id}")),
+        if *hovered.read(cx) { 1. } else { 0. },
+        SPRING_FAST,
+        window,
+        cx,
+    );
+    let pressed = window.use_keyed_state(
+        SharedString::from(format!("card-pressed-{id}")),
+        cx,
+        |_, _| false,
+    );
+    // Pressing shrinks the face to 98% (Modrinth's cards): the layer insets, content stays.
+    let press: f32 = spring(
+        SharedString::from(format!("card-press-{id}")),
+        if *pressed.read(cx) { 1. } else { 0. },
+        SPRING_PRESS,
+        window,
+        cx,
+    );
+    let (inset_x, inset_y) = (px(CARD * 0.01 * press), px((ART + 72.) * 0.01 * press));
     let (action, icon, enabled) = status.action();
     // Running and installing keep their button up: it is how you stop them.
     let reveal = match status {
@@ -370,22 +392,52 @@ fn card(
 
     div()
         .id(SharedString::from(format!("card-{id}")))
+        .relative()
         .flex()
         .flex_col()
         .gap_2()
         .w(px(CARD))
         .p_2()
         .pb_3()
-        .rounded(theme.radius_lg)
-        .bg(theme.group_box)
-        .border_1()
-        .border_color(theme.border)
         .cursor_pointer()
-        .hover(|s| s.border_color(theme.muted_foreground.opacity(0.4)))
         .on_hover(move |is_hovered, window, cx| {
             hovered.update(cx, |h, _| *h = *is_hovered);
             window.refresh();
         })
+        .on_mouse_down(MouseButton::Left, {
+            let pressed = pressed.clone();
+            move |_, window, cx| {
+                pressed.update(cx, |p, _| *p = true);
+                window.refresh();
+            }
+        })
+        .on_mouse_up(MouseButton::Left, {
+            let pressed = pressed.clone();
+            move |_, window, cx| {
+                pressed.update(cx, |p, _| *p = false);
+                window.refresh();
+            }
+        })
+        .on_mouse_up_out(MouseButton::Left, move |_, window, cx| {
+            pressed.update(cx, |p, _| *p = false);
+            window.refresh();
+        })
+        .child(
+            div()
+                .absolute()
+                .top(inset_y)
+                .bottom(inset_y)
+                .left(inset_x)
+                .right(inset_x)
+                .rounded(theme.radius_lg)
+                .bg(ui::mix(
+                    theme.group_box,
+                    ui::hovered(theme.group_box, cx),
+                    surface,
+                ))
+                .border_1()
+                .border_color(theme.border),
+        )
         .on_click({
             let (shell, id) = (shell.clone(), id.clone());
             move |_, _, cx| {

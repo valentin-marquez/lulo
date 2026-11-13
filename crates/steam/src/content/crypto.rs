@@ -19,7 +19,7 @@ pub fn decrypt(key: &Key, data: &[u8]) -> Result<Vec<u8>> {
 
     let mut out = Vec::with_capacity(data.len() - 16);
     let mut prev = iv;
-    for block in data[16..].chunks_exact(16) {
+    for block in data[16..].as_chunks::<16>().0 {
         let mut b = GenericArray::clone_from_slice(block);
         cipher.decrypt_block(&mut b);
         out.extend(b.iter().zip(prev.iter()).map(|(x, p)| x ^ p));
@@ -53,7 +53,7 @@ pub(crate) mod tests {
         cipher.encrypt_block(&mut head);
         let mut out = head.to_vec();
         let mut prev = GenericArray::from(iv);
-        for block in data.chunks_exact(16) {
+        for block in data.as_chunks::<16>().0 {
             let mut b = GenericArray::clone_from_slice(block);
             b.iter_mut().zip(prev.iter()).for_each(|(x, p)| *x ^= p);
             cipher.encrypt_block(&mut b);

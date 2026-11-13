@@ -25,6 +25,8 @@ struct Manifest {
     created: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     icon: Option<Icon>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    launch_args: String,
 }
 
 /// Where instances live: `$LULO_HOME/instances`, else the OS data dir.
@@ -143,6 +145,7 @@ pub fn create(root: &Path, name: &str, branch: &str) -> io::Result<Instance> {
         last_played: None,
         created: now(),
         icon: None,
+        launch_args: String::new(),
     };
     write(&dir, &manifest)?;
     Ok(instance(id, dir, &manifest))
@@ -200,6 +203,18 @@ pub fn delete(root: &Path, dir: &Path) -> io::Result<()> {
     prune(root)
 }
 
+/// Records the extra arguments the game starts with.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the instance settings view (#17) will call it")
+)]
+pub fn set_launch_args(dir: &Path, args: &str) -> io::Result<()> {
+    let path = dir.join(FILE);
+    let mut manifest: Manifest = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    manifest.launch_args = args.trim().to_owned();
+    write(dir, &manifest)
+}
+
 /// Records that the instance was just played.
 pub fn set_last_played(dir: &Path, at: u64) -> io::Result<()> {
     let path = dir.join(FILE);
@@ -224,6 +239,7 @@ fn instance(id: String, dir: PathBuf, m: &Manifest) -> Instance {
         build: m.build,
         last_played: m.last_played,
         icon: m.icon.clone(),
+        launch_args: m.launch_args.clone(),
     }
 }
 
@@ -323,6 +339,29 @@ mod tests {
         assert!(builds.join("1").is_dir());
         assert!(!builds.join("2").exists());
         assert!(builds.join("3").is_dir());
+
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn keeps_the_launch_arguments() {
+        let root = temp_root("args");
+        let a = create(&root, "A", "public").unwrap();
+        assert_eq!(list(&root)[0].launch_args, "");
+        assert!(
+            !std::fs::read_to_string(a.dir.join(FILE))
+                .unwrap()
+                .contains("launch_args")
+        );
+
+        set_launch_args(&a.dir, "  -debug -nosteam  ").unwrap();
+        assert_eq!(list(&root)[0].launch_args, "-debug -nosteam");
+        set_launch_args(&a.dir, "").unwrap();
+        assert!(
+            !std::fs::read_to_string(a.dir.join(FILE))
+                .unwrap()
+                .contains("launch_args")
+        );
 
         std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }

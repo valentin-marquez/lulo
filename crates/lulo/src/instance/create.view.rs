@@ -219,6 +219,7 @@ impl Create {
     /// The icon preview with Upload, Randomize and Customize beside it.
     fn picture(&self, cx: &mut Context<Self>) -> Div {
         let preview = Instance {
+            launch_args: String::new(),
             id: "preview".into(),
             dir: PathBuf::new(),
             name: "".into(),

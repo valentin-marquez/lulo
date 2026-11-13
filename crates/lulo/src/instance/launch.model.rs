@@ -39,8 +39,43 @@ pub fn command(instance: &Instance) -> io::Result<Command> {
         }
         Command::new(exe)
     };
-    command.arg(cachedir).current_dir(&game);
+    // Before `-cachedir`, so lulo's own folder wins if the user types one too.
+    command
+        .args(split_args(&instance.launch_args))
+        .arg(cachedir)
+        .current_dir(&game);
     Ok(command)
+}
+
+/// Splits arguments on spaces; quotes group words and are dropped, so a path can hold spaces.
+// shortcut: no backslash escapes, so Windows paths stay as typed; add them if a flag ever needs
+// a literal quote.
+fn split_args(text: &str) -> Vec<String> {
+    let (mut args, mut word) = (Vec::new(), String::new());
+    let (mut quote, mut started) = (None, false);
+    for c in text.chars() {
+        match (c, quote) {
+            ('"' | '\'', None) => {
+                quote = Some(c);
+                started = true;
+            }
+            (c, Some(open)) if c == open => quote = None,
+            (c, None) if c.is_whitespace() => {
+                if started {
+                    args.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (c, _) => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        args.push(word);
+    }
+    args
 }
 
 // ponytail: the game's output is dropped; the Logs tab (#16) will read it.
@@ -101,6 +136,24 @@ fn running(name: &str) -> bool {
         })
 }
 
+#[cfg(test)]
+mod split_tests {
+    use super::split_args;
+
+    #[test]
+    fn splits_on_spaces_and_groups_quotes() {
+        assert_eq!(split_args(""), Vec::<String>::new());
+        assert_eq!(split_args("  -debug   -nosteam "), ["-debug", "-nosteam"]);
+        assert_eq!(
+            split_args(r#"-pzexeconfig "C:\My Games\pz.json" -x"#),
+            ["-pzexeconfig", r"C:\My Games\pz.json", "-x"]
+        );
+        assert_eq!(split_args("-a='b c' d"), ["-a=b c", "d"]);
+        assert_eq!(split_args(r#"-a "" b"#), ["-a", "", "b"]);
+        assert_eq!(split_args(r#"-a "open"#), ["-a", "open"]);
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
@@ -116,6 +169,7 @@ mod tests {
             build: Some(1),
             last_played: None,
             icon: None,
+            launch_args: "-debug".into(),
         };
         assert!(command(&instance).is_err(), "no game files yet");
 
@@ -132,7 +186,10 @@ mod tests {
             .collect();
         assert_eq!(
             args,
-            [format!("-cachedir={}", dir.join("zomboid").display())]
+            [
+                "-debug".to_owned(),
+                format!("-cachedir={}", dir.join("zomboid").display())
+            ]
         );
         assert_eq!(cmd.get_current_dir(), Some(dir.join("game").as_path()));
         std::fs::remove_dir_all(&dir).unwrap();

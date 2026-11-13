@@ -45,6 +45,8 @@ pub struct Instance {
     pub last_played: Option<u64>,
     /// Chosen icon; `None` shows the one picked from the id.
     pub icon: Option<Icon>,
+    /// Extra arguments for the game, as typed; empty for none.
+    pub launch_args: String,
 }
 
 /// An instance's picture, stored in its `instance.json`.
@@ -227,6 +229,7 @@ mod tests {
             build,
             last_played: None,
             icon: None,
+            launch_args: String::new(),
         }
     }
 

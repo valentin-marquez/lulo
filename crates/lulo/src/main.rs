@@ -5,6 +5,7 @@ mod instance;
 mod library;
 mod runtime;
 mod screenshots;
+mod settings;
 mod shell;
 mod theme;
 mod ui;

@@ -157,7 +157,8 @@ pub fn render(shell: &Shell, cx: &mut Context<Shell>) -> impl IntoElement {
         .child(
             row("settings", false, cx)
                 .child(tile(IconName::Settings, cx))
-                .child(div().text_sm().child("Settings")),
+                .child(div().text_sm().child("Settings"))
+                .on_click(|_, window, cx| crate::settings::open(window, cx)),
         )
         .child({
             let account = handle.clone();

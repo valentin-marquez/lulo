@@ -23,7 +23,6 @@ enum Step {
     Choose,
     Custom,
     Collection,
-    Import,
 }
 
 /// Height shared by the inputs and buttons of the form.
@@ -70,7 +69,6 @@ struct Create {
     /// The name used when the field is left empty; it shows as the placeholder.
     suggested: &'static str,
     link: Entity<InputState>,
-    path: Entity<InputState>,
 }
 
 impl Create {
@@ -89,9 +87,6 @@ impl Create {
             link: cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder("https://steamcommunity.com/sharedfiles/filedetails/?id=")
-            }),
-            path: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("Folder with a Project Zomboid install")
             }),
         }
     }
@@ -168,13 +163,6 @@ impl Create {
                 "Import a .lulopack",
                 "Open a shared pack with its build, mods and settings. Coming soon.",
                 false,
-            ),
-            (
-                Step::Import,
-                IconName::FolderOpen,
-                "Import an existing install",
-                "Bring over a Steam or KnoxKit install with its mods and saves.",
-                true,
             ),
         ];
         div()
@@ -427,26 +415,6 @@ impl Render for Create {
                         self.footer(create, cx)
                     })
             }
-            Step::Import => div()
-                .flex()
-                .flex_col()
-                .gap_4()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1p5()
-                        .child(label("Install folder"))
-                        .child(Input::new(&self.path))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Copies the game, mods and saves into a new instance."),
-                        ),
-                )
-                // ponytail: importing lands with #23; the step only collects the folder for now.
-                .child(self.footer(None, cx)),
         };
         body.with_animation(
             step,

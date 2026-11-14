@@ -58,7 +58,7 @@ impl From<PublishedFileDetails> for Item {
     }
 }
 
-async fn fetch(
+async fn query(
     client: &mut Client,
     ids: &[u64],
     children: bool,
@@ -75,7 +75,7 @@ async fn fetch(
 
 /// What the Workshop says about each of `ids`, with the items each one requires.
 pub async fn details(client: &mut Client, ids: &[u64]) -> Result<Vec<Item>> {
-    Ok(fetch(client, ids, true)
+    Ok(query(client, ids, true)
         .await?
         .into_iter()
         .map(Item::from)
@@ -112,6 +112,8 @@ pub async fn trending(client: &mut Client, app: u32, days: u32, count: u32) -> R
 pub struct Collection {
     pub id: u64,
     pub title: String,
+    /// URL of its picture on the Workshop, as [`Item::preview`].
+    pub preview: Option<String>,
     /// Every mod once, in the collection's order and then the order dependencies were found.
     /// Items that are gone or private are left out.
     pub mods: Vec<Item>,
@@ -120,7 +122,7 @@ pub struct Collection {
 /// The mods of collection `id`: the ones it lists, the collections inside it, and what each
 /// mod requires (`children`), each once.
 pub async fn collection(client: &mut Client, id: u64) -> Result<Collection> {
-    let root = fetch(client, &[id], true)
+    let root = query(client, &[id], true)
         .await?
         .into_iter()
         .next()
@@ -132,7 +134,7 @@ pub async fn collection(client: &mut Client, id: u64) -> Result<Collection> {
     while !queue.is_empty() {
         let take = queue.len().min(BATCH);
         let batch: Vec<u64> = queue.drain(..take).collect();
-        for item in fetch(client, &batch, true).await? {
+        for item in query(client, &batch, true).await? {
             queue.extend(new_children(&item, &mut seen));
             if item.result() == OK && item.file_type() != COLLECTION {
                 mods.push(Item::from(item));
@@ -145,6 +147,7 @@ pub async fn collection(client: &mut Client, id: u64) -> Result<Collection> {
     Ok(Collection {
         id,
         title: root.title().to_owned(),
+        preview: root.preview_url.clone().filter(|url| is_steam_image(url)),
         mods,
     })
 }
@@ -215,8 +218,66 @@ pub fn parse_id(text: &str) -> Option<u64> {
         .find_map(|pair| pair.strip_prefix("id=")?.parse().ok())
 }
 
-/// Downloads `item`'s current version into `dir`. `progress` receives the bytes done so far.
+/// What every Workshop download of an app needs: its depot key and CDN hosts. They are the
+/// same for all of the app's items, so a batch asks for them once.
+#[derive(Debug, Clone)]
+pub struct Source {
+    app: u32,
+    key: content::Key,
+    hosts: Vec<String>,
+}
+
+/// The [`Source`] for `app`'s Workshop items (PZ's live in the game's own depot).
+pub async fn source(client: &mut Client, app: u32) -> Result<Source> {
+    Ok(Source {
+        app,
+        key: content::depot_key(client, app, app).await?,
+        hosts: content::cdn_hosts(client).await?,
+    })
+}
+
+/// The file list of `item`'s current version. This is the step that needs the Steam client,
+/// so a batch takes them one by one and downloads with [`fetch`] in parallel.
+pub async fn manifest(
+    client: &mut Client,
+    http: &reqwest::Client,
+    source: &Source,
+    item: &Item,
+) -> Result<content::Manifest> {
+    content::manifest(
+        client,
+        http,
+        &source.hosts[0],
+        (source.app, source.app, item.manifest),
+        "public",
+        &source.key,
+    )
+    .await
+}
+
+/// Writes the files of `manifest` into `dir`. `progress` receives the bytes done so far.
 // ponytail: legacy `file_url` items aren't handled; none of the PZ mods tested use them.
+pub async fn fetch(
+    http: &reqwest::Client,
+    source: &Source,
+    manifest: &content::Manifest,
+    dir: &Path,
+    progress: impl FnMut(u64),
+) -> Result<()> {
+    content::install(
+        http,
+        &source.hosts,
+        (source.app, &source.key),
+        manifest,
+        dir,
+        None,
+        progress,
+    )
+    .await
+    .map(drop)
+}
+
+/// Downloads `item`'s current version into `dir`. `progress` receives the bytes done so far.
 pub async fn download(
     client: &mut Client,
     http: &reqwest::Client,
@@ -224,28 +285,9 @@ pub async fn download(
     dir: &Path,
     progress: impl FnMut(u64),
 ) -> Result<()> {
-    let key = content::depot_key(client, item.app, item.app).await?;
-    let hosts = content::cdn_hosts(client).await?;
-    let manifest = content::manifest(
-        client,
-        http,
-        &hosts[0],
-        (item.app, item.app, item.manifest),
-        "public",
-        &key,
-    )
-    .await?;
-    content::install(
-        http,
-        &hosts,
-        (item.app, &key),
-        &manifest,
-        dir,
-        None,
-        progress,
-    )
-    .await
-    .map(drop)
+    let source = source(client, item.app).await?;
+    let manifest = manifest(client, http, &source, item).await?;
+    fetch(http, &source, &manifest, dir, progress).await
 }
 
 #[cfg(test)]

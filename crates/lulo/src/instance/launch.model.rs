@@ -51,9 +51,12 @@ pub fn command(instance: &Instance) -> io::Result<Command> {
     if !jvm.is_empty() {
         command.args(jvm).arg("--");
     }
-    // Before `-cachedir`, so lulo's own folder wins if the user types one too.
+    // Before `-cachedir`, so lulo's own folder wins if the user types one too. Mods load only
+    // from the instance's own `zomboid/mods`, not from what Steam has subscribed: that keeps
+    // instances apart, and the same mod in both places would clash.
     command
         .args(split_args(&instance.launch_args))
+        .args(["-modfolders", "mods"])
         .arg(cachedir)
         .current_dir(&game);
     Ok(command)
@@ -210,6 +213,8 @@ mod tests {
                 "-XX:+AlwaysPreTouch".to_owned(),
                 "--".to_owned(),
                 "-debug".to_owned(),
+                "-modfolders".to_owned(),
+                "mods".to_owned(),
                 format!("-cachedir={}", dir.join("zomboid").display())
             ]
         );

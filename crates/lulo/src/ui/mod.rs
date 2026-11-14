@@ -111,6 +111,21 @@ pub fn secondary(id: &'static str, label: &'static str) -> gpui_kit::component::
         .rounded(px(8.))
 }
 
+/// The tray a row of pill tabs sits in: the corners of an input, with its own fill and border,
+/// so the tabs read as one control and not as loose words.
+pub fn tab_tray(tabs: impl gpui_kit::IntoElement, cx: &App) -> gpui_kit::Div {
+    use gpui_kit::*;
+    let theme = cx.theme();
+    div()
+        .flex_none()
+        .p_1()
+        .rounded(theme.radius)
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .child(tabs)
+}
+
 /// One-shot entrance for content that replaces other content in place (a dialog's section):
 /// fades in rising a few px. `key` changes to replay it.
 pub fn enter(content: gpui_kit::Div, key: &'static str) -> impl gpui_kit::IntoElement {
@@ -158,6 +173,11 @@ pub mod toast {
             })
             // A toast with a button stays by default; this one is only a reminder.
             .autohide(true)
+    }
+
+    /// Something worked, with a catch the user should know about.
+    pub fn heads_up(what: &'static str, detail: impl ToString) -> Notification {
+        Notification::warning(detail.to_string()).title(what)
     }
 
     pub fn working(text: impl Into<SharedString>) -> Notification {

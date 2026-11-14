@@ -39,7 +39,7 @@ pub struct Shell {
     account: Option<Account>,
     /// Newest Steam build id per branch name; empty until the first check succeeds.
     latest: HashMap<SharedString, u32>,
-    /// Installs in progress by instance id.
+    /// Downloads in progress: a game install by its instance id, a mod by [`mod_key`].
     installs: HashMap<SharedString, install::Download>,
     /// Games running, by instance id.
     running: HashMap<SharedString, std::process::Child>,
@@ -336,6 +336,71 @@ impl Shell {
     }
 
     /// Installs in progress, by name so the order holds still between frames.
+    /// Whether a mod is being downloaded into instance `id`.
+    pub fn adding_mods(&self, id: &SharedString) -> bool {
+        let prefix = mod_key(id, "");
+        self.installs.keys().any(|key| key.starts_with(&*prefix))
+    }
+
+    /// Downloads Workshop item `item` into `instance`, shown in the download manager like a
+    /// game install: progress, speed, cancel.
+    pub fn add_mod(
+        &mut self,
+        instance: Instance,
+        item: u64,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_kit::component::WindowExt;
+        let key = mod_key(&instance.id, &item.to_string());
+        if self.installs.contains_key(&key) {
+            return;
+        }
+        let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        let task = crate::runtime::spawn(instance::mods::install(
+            instance,
+            item,
+            move |title, done, total| {
+                let _ = events_tx.send((SharedString::from(title.to_owned()), done, total));
+            },
+        ));
+        let download = install::Download::new("Workshop mod".into(), task.abort_handle());
+        self.installs.insert(key.clone(), download);
+        self.changed(cx);
+        cx.spawn(async move |this, cx| {
+            // The sender lives in the task: this loop ends when the task does.
+            while let Some((title, done, total)) = events.recv().await {
+                let _ = this.update(cx, |shell, cx| {
+                    let Some(download) = shell.installs.get_mut(&key) else {
+                        return;
+                    };
+                    let renamed = download.name != title;
+                    download.name = title;
+                    if download.progress(done, total, std::time::Instant::now()) || renamed {
+                        shell.changed(cx);
+                    }
+                });
+            }
+            let added = task.await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.installs.remove(&key);
+                shell.changed(cx);
+            });
+            let note = match added {
+                Ok(Ok(added)) => crate::ui::toast::done(match added.with.len() {
+                    0 => format!("{} is in! Ready for your next run", added.title),
+                    1 => format!("{} is in, with the mod it needs", added.title),
+                    many => format!("{} is in, with the {many} mods it needs", added.title),
+                }),
+                Ok(Err(why)) => crate::ui::toast::failed_because("That mod didn't make it", why),
+                // Cancelled from the download manager: nothing to say.
+                Err(_) => return,
+            };
+            let _ = window.update(cx, |_, window, cx| window.push_notification(note, cx));
+        })
+        .detach();
+    }
+
     pub fn downloads(&self) -> Vec<(&SharedString, &install::Download)> {
         let mut all: Vec<_> = self.installs.iter().collect();
         all.sort_by(|a, b| a.1.name.cmp(&b.1.name));
@@ -456,7 +521,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         use gpui_kit::component::WindowExt;
-        if self.running.contains_key(id) || self.installs.contains_key(id) {
+        if self.running.contains_key(id) || self.installs.contains_key(id) || self.adding_mods(id) {
             return Err("Whoa! Stop the game before deleting it".into());
         }
         let Some(ix) = self.instances.iter().position(|i| i.id == *id) else {
@@ -504,7 +569,7 @@ impl Shell {
     /// Repaints the shell and the detail view (a child entity doesn't redraw on its own).
     fn changed(&mut self, cx: &mut Context<Self>) {
         if let Some(detail) = &self.detail {
-            detail.update(cx, |_, cx| cx.notify());
+            detail.update(cx, |detail, cx| detail.changed(cx));
         }
         if let Some(library) = &self.library {
             library.update(cx, |_, cx| cx.notify());
@@ -569,6 +634,11 @@ impl Shell {
             cx,
         );
     }
+}
+
+/// The download manager's key for Workshop item `item` going into instance `instance`.
+fn mod_key(instance: &SharedString, item: &str) -> SharedString {
+    format!("mod:{instance}:{item}").into()
 }
 
 impl Render for Shell {

@@ -56,6 +56,8 @@ pub struct Detail {
     shell: WeakEntity<Shell>,
     /// Made on first view; it needs a window for its search field.
     logs: Option<Entity<super::logs_view::Logs>>,
+    /// Made on first view too, for its link field.
+    mods: Option<Entity<super::mods_view::Mods>>,
 }
 
 impl Detail {
@@ -65,6 +67,7 @@ impl Detail {
             tab: Tab::Mods,
             shell,
             logs: None,
+            mods: None,
         }
     }
 
@@ -72,9 +75,18 @@ impl Detail {
         self.instance.id.clone()
     }
 
+    /// Something about the instance changed outside this view (a download moved or ended).
+    pub fn changed(&mut self, cx: &mut Context<Self>) {
+        if let Some(mods) = &self.mods {
+            mods.update(cx, |mods, cx| mods.refresh(cx));
+        }
+        cx.notify();
+    }
+
     pub fn show(&mut self, instance: Instance, cx: &mut Context<Self>) {
         if instance.id != self.instance.id {
             self.logs = None;
+            self.mods = None;
         }
         self.instance = instance;
         cx.notify();
@@ -170,13 +182,17 @@ impl Detail {
             })
     }
 
-    /// Mods, Worlds, Logs: the underline slides between them on a spring (gpui-component's
-    /// TabBar measures each tab and keeps the indicator interruptible).
+    /// Mods, Worlds, Logs as pills in a tray: the chosen one is filled with the accent, and
+    /// the fill slides between them on a spring (gpui-component's TabBar measures
+    /// each tab and keeps the indicator interruptible).
     fn tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_kit::component::tab::{Tab as Item, TabBar};
         let selected = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
+        use gpui_kit::component::Sizable as _;
         TabBar::new("instance-tabs")
-            .underline()
+            .pill()
+            // 36 px, the height of the buttons around it.
+            .large()
             .selected_index(selected)
             .children(Tab::ALL.map(|tab| Item::new().label(tab.label()).cursor_pointer()))
             .on_click(cx.listener(|this, ix: &usize, _, cx| {
@@ -198,11 +214,21 @@ impl Render for Detail {
                     .clone()
                     .into_any_element()
             }
+            Tab::Mods => {
+                let (instance, shell) = (self.instance.clone(), self.shell.clone());
+                self.mods
+                    .get_or_insert_with(|| {
+                        cx.new(|cx| super::mods_view::Mods::new(instance, shell, window, cx))
+                    })
+                    .clone()
+                    .into_any_element()
+            }
             tab => {
                 let (icon, title, line) = tab.empty();
                 Empty::new(icon, title, line).into_any_element()
             }
         };
+        let tabs = self.tabs(cx).into_any_element();
         div()
             .flex()
             .flex_col()
@@ -210,7 +236,9 @@ impl Render for Detail {
             .gap_5()
             .p_6()
             .child(self.header(cx))
-            .child(self.tabs(cx))
+            // The tabs are their own island: a tray that holds the three pills, so they read
+            // as one control. What a tab shows stays a separate island below.
+            .child(div().flex().child(crate::ui::tab_tray(tabs, cx)))
             .child(body)
     }
 }

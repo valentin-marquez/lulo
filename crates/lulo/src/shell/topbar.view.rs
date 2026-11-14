@@ -1,4 +1,4 @@
-//! Title bar: logo and what is running.
+//! Title bar: logo, the download manager, and which instance is running.
 
 use gpui_kit::component::{ActiveTheme, Icon, TitleBar};
 use gpui_kit::*;
@@ -7,6 +7,8 @@ use crate::assets::LOGO;
 
 /// Taller than gpui-component's 34px default so the header carries the window.
 pub const HEIGHT: Pixels = px(48.);
+/// Height of the two pills on the right: a small button's, so they read as controls.
+pub const PILL: Pixels = px(36.);
 
 #[derive(IntoElement)]
 pub struct Topbar {
@@ -58,12 +60,12 @@ impl Topbar {
             .flex()
             .items_center()
             .gap_2()
-            .h(px(28.))
-            .px_3()
+            .h(PILL)
+            .px_3p5()
             .rounded_full()
             .border_1()
             .border_color(theme.border)
-            .text_xs()
+            .text_sm()
             .text_color(theme.muted_foreground)
             .child(match self.running {
                 Some(_) => Icon::empty()

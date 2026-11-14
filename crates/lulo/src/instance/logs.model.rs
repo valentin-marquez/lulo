@@ -40,9 +40,11 @@ impl Level {
 
 pub struct Line {
     pub level: Level,
-    /// Local `HH:MM:SS`; `None` on continuation lines (stack traces, wrapped messages).
+    /// Local `HH:MM:SS`. `None` on continuation lines, and on Build 42's live console, which
+    /// writes no time.
     pub time: Option<SharedString>,
-    /// PZ's logger name, e.g. `General`, `Mod`, `Lua`.
+    /// PZ's logger name, e.g. `General`, `Mod`, `Lua`; `None` on continuation lines (stack
+    /// traces, wrapped messages), which is how an entry is told from one.
     pub category: Option<SharedString>,
     pub message: SharedString,
     /// The line as written, for copying.
@@ -181,10 +183,13 @@ impl Console {
     }
 }
 
-/// One line of either format:
-/// `LOG  : General     , 1794524872665> message` (console.txt, epoch milliseconds), or the
-/// same behind `[12-11-26 20:07:52.665] ` (saved sessions, local time). Anything else continues
-/// the entry above and keeps its level.
+/// One line of the game's console, in either build's format:
+/// - Build 41: `LOG  : General     , 1794524872665> message` (epoch milliseconds);
+/// - Build 42: `LOG  : General      f:0> message`, or with where it was logged from,
+///   `ERROR: General      f:0 at AngelCodeFont.parseFnt   > message` (no time at all).
+///
+/// Saved sessions put `[12-11-26 20:07:52.665] ` (local time) before either. Anything else
+/// continues the entry above and keeps its level.
 fn parse(line: &str, last: Level) -> Line {
     let raw: SharedString = line.trim_end().to_owned().into();
     let (stamp, rest) = match line.strip_prefix('[').and_then(|l| l.split_once("] ")) {
@@ -193,18 +198,12 @@ fn parse(line: &str, last: Level) -> Line {
     };
     let entry = Level::of(rest).and_then(|level| {
         let body = rest.split_once(':')?.1.trim_start();
-        let (category, tail) = body.split_once(',')?;
-        let (millis, message) = tail.trim_start().split_once("> ")?;
-        let millis: i64 = millis.parse().ok()?;
-        let time = match stamp {
-            Some(stamp) => stamp.to_owned(),
-            None => local_time(millis)?,
-        };
+        let (category, time, message) = entry_41(body, stamp).or_else(|| entry_42(body, stamp))?;
         Some(Line {
             level,
-            time: Some(time.into()),
-            category: Some(category.trim().to_owned().into()),
-            message: message.trim_end().to_owned().into(),
+            time: time.map(SharedString::from),
+            category: Some(category.to_owned().into()),
+            message: message.into(),
             raw: raw.clone(),
         })
     });
@@ -215,6 +214,38 @@ fn parse(line: &str, last: Level) -> Line {
         message: rest.trim_end().replace('\t', "    ").into(),
         raw,
     })
+}
+
+/// Category, time and message of a Build 41 entry, after its `LEVEL:`.
+fn entry_41<'a>(body: &'a str, stamp: Option<&str>) -> Option<(&'a str, Option<String>, String)> {
+    let (category, tail) = body.split_once(',')?;
+    let (millis, message) = tail.trim_start().split_once("> ")?;
+    let millis: i64 = millis.parse().ok()?;
+    let time = match stamp {
+        Some(stamp) => stamp.to_owned(),
+        None => local_time(millis)?,
+    };
+    Some((category.trim(), Some(time), message.trim_end().to_owned()))
+}
+
+/// The same for Build 42: `General      f:0> text` or `General      f:0 at Where.from   > text`.
+/// The frame counter is dropped; where it was logged from leads the message.
+fn entry_42<'a>(body: &'a str, stamp: Option<&str>) -> Option<(&'a str, Option<String>, String)> {
+    let (category, tail) = body.split_once(char::is_whitespace)?;
+    let (head, message) = tail.trim_start().strip_prefix("f:")?.split_once('>')?;
+    let (frame, from) = match head.split_once(" at ") {
+        Some((frame, from)) => (frame, Some(from.trim())),
+        None => (head, None),
+    };
+    if frame.trim().parse::<u64>().is_err() {
+        return None;
+    }
+    let message = message.trim();
+    let message = match from.filter(|from| !from.is_empty()) {
+        Some(from) => format!("{from} > {message}"),
+        None => message.to_owned(),
+    };
+    Some((category, stamp.map(str::to_owned), message))
 }
 
 fn local_time(millis: i64) -> Option<String> {
@@ -240,6 +271,40 @@ COMMAND QUEUE stallCount = 0 peakUsage = 352
 
     fn levels(lines: &[Line]) -> Vec<Level> {
         lines.iter().map(|l| l.level).collect()
+    }
+
+    // Captured from a Build 42.22 console.txt and its saved session (paths shortened).
+    #[test]
+    fn reads_build_42_entries() {
+        let plain = parse("LOG  : General      f:0> RAM: 15907 Mb", Level::Info);
+        assert_eq!(plain.level, Level::Info);
+        assert_eq!(plain.category.as_deref(), Some("General"));
+        assert_eq!(
+            (plain.time.is_none(), plain.message.as_ref()),
+            (true, "RAM: 15907 Mb")
+        );
+
+        let from = parse(
+            "ERROR: General      f:0 at AngelCodeFont.parseFnt              > AngelCodeFont failed to load page 0 texture /media/mainfont_0.png",
+            Level::Info,
+        );
+        assert_eq!(from.level, Level::Error);
+        assert_eq!(
+            from.message.as_ref(),
+            "AngelCodeFont.parseFnt > AngelCodeFont failed to load page 0 texture /media/mainfont_0.png"
+        );
+
+        let saved = parse(
+            "[13-11-26 20:38:33.898] WARN : Lua          f:12> ===== System specs =====.",
+            Level::Info,
+        );
+        assert_eq!(saved.level, Level::Warn);
+        assert_eq!(saved.time.as_deref(), Some("20:38:33"));
+        assert_eq!(saved.category.as_deref(), Some("Lua"));
+
+        // Not an entry: no frame counter where one belongs.
+        let not = parse("LOG  : just some text > here", Level::Warn);
+        assert_eq!((not.category.is_none(), not.level), (true, Level::Info));
     }
 
     #[test]

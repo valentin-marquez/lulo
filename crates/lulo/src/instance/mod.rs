@@ -18,6 +18,12 @@ pub mod launch;
 pub mod logs;
 #[path = "logs.view.rs"]
 mod logs_view;
+#[path = "mod-add.view.rs"]
+pub mod mod_add;
+#[path = "mods.model.rs"]
+pub mod mods;
+#[path = "mods.view.rs"]
+pub mod mods_view;
 #[path = "picture.view.rs"]
 pub mod picture;
 #[path = "settings.view.rs"]

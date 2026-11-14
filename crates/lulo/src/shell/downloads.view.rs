@@ -1,5 +1,7 @@
 //! Download manager: a pill in the title bar whose fill is the overall progress, opening a
-//! panel with every install (bar, size, speed, time left, cancel). Modrinth App's pattern.
+//! panel with every download, games and mods (bar, size, speed, time left, cancel). Modrinth
+//! App's pattern. It is always there, apart from what is running, so there is one place to
+//! look for downloads whether or not any is going.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable;
@@ -7,12 +9,13 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::Shell;
 use crate::instance::install::{self, Download};
 
-/// What the pill shows; `None` hides it (nothing downloading).
+/// What the pill shows; `None` when nothing is downloading.
 #[derive(IntoElement)]
 pub struct Pill {
     summary: Option<Summary>,
@@ -54,9 +57,7 @@ impl Pill {
 
 impl RenderOnce for Pill {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let Some(summary) = self.summary else {
-            return div().into_any_element();
-        };
+        let summary = self.summary;
         let shell = self.shell;
         Popover::new("downloads")
             .anchor(Anchor::TopRight)
@@ -72,7 +73,7 @@ impl RenderOnce for Pill {
 /// The pill itself: a Popover trigger has to be `Selectable`.
 #[derive(IntoElement)]
 struct Trigger {
-    summary: Summary,
+    summary: Option<Summary>,
     open: bool,
 }
 
@@ -90,17 +91,16 @@ impl Selectable for Trigger {
 impl RenderOnce for Trigger {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let s = self.summary;
-        div()
+        let pill = div()
             .id("downloads-pill")
             .relative()
             .overflow_hidden()
             .flex()
             .items_center()
             .gap_2()
-            .h(px(28.))
-            .max_w(px(320.))
-            .px_3()
+            .h(super::topbar::PILL)
+            .max_w(px(360.))
+            .px_3p5()
             .rounded_full()
             .border_1()
             .border_color(if self.open {
@@ -108,9 +108,16 @@ impl RenderOnce for Trigger {
             } else {
                 theme.border
             })
-            .text_xs()
+            .text_sm()
             .cursor_pointer()
-            .hover(|style| style.border_color(theme.primary))
+            .hover(|style| style.border_color(theme.primary));
+        let Some(s) = self.summary else {
+            return pill
+                .text_color(theme.muted_foreground)
+                .child(Icon::new(IconName::Download).size_4())
+                .child("Downloads");
+        };
+        pill
             // The fill behind the content is the progress bar.
             .child(
                 div()
@@ -123,7 +130,7 @@ impl RenderOnce for Trigger {
             )
             .child(
                 Icon::new(IconName::Download)
-                    .size_3p5()
+                    .size_4()
                     .text_color(theme.primary),
             )
             .child(
@@ -171,6 +178,14 @@ fn panel(shell: &WeakEntity<Shell>, cx: &mut App) -> AnyElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child("Downloads"),
         )
+        .when(rows.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("All quiet. Games and mods you download show up here."),
+            )
+        })
         .children(rows)
         .into_any_element()
 }

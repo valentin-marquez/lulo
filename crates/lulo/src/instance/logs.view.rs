@@ -1,5 +1,7 @@
 //! Logs tab: one bar (session, level counts, search) over the console, followed live. Lines are
-//! selected by row (click, drag or shift-click) and copied with the shortcut or the Copy button.
+//! selected by row (click, drag, shift-click, or all of them with the select-all shortcut) and
+//! copied with the copy shortcut or the Copy button.
+//! Dragging past the top or bottom edge scrolls the list and keeps selecting.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,17 @@ use gpui_kit::*;
 
 use super::logs::{self, Console, Level, Line, Session};
 use crate::ui::Empty;
+
+/// Height of the bar's controls: the primary button's small size, like every toolbar.
+const CONTROL: Pixels = px(36.);
+/// Width of the session picker, whatever it names: "Live" and a saved session's date are
+/// different lengths, and the rest of the bar must not shift when one replaces the other.
+/// Just enough for the longest name ("Nov 13 20:38") with its icon.
+const SESSION: Pixels = px(132.);
+/// Height of one line.
+const ROW: f32 = 22.;
+/// Dragging this close to the list's top or bottom edge, or past it, scrolls it.
+const EDGE: f32 = 24.;
 
 const FILTERS: [(&str, Option<Level>); 4] = [
     ("All", None),
@@ -37,7 +50,12 @@ pub struct Logs {
     scroll: UniformListScrollHandle,
     /// Selected rows of `shown`: where the selection started and where it ends now.
     selection: Option<(usize, usize)>,
-    dragging: bool,
+    /// Runs while the mouse button is held on the list: follows the pointer, scrolling at
+    /// the edges. Dropping it ends the drag.
+    drag: Option<Task<()>>,
+    /// Whether any line carries a time; Build 42's live console has none, and then the
+    /// column is left out instead of standing empty.
+    timed: bool,
     focus: FocusHandle,
     _poll: Task<()>,
     _search: Subscription,
@@ -71,7 +89,8 @@ impl Logs {
             search,
             scroll: UniformListScrollHandle::new(),
             selection: None,
-            dragging: false,
+            drag: None,
+            timed: false,
             focus: cx.focus_handle(),
             _poll: poll,
             _search: on_search,
@@ -129,15 +148,55 @@ impl Logs {
             .filter(|(_, line)| query.is_empty() || line.raw.to_lowercase().contains(&query))
             .map(|(ix, _)| ix)
             .collect();
+        self.timed = self.lines.iter().any(|line| line.time.is_some());
         self.selection = None;
         cx.notify();
+    }
+
+    /// The shown row under window position `y`, clamped to the list.
+    fn row_at(&self, y: Pixels) -> Option<usize> {
+        let handle = self.scroll.0.borrow().base_handle.clone();
+        let inside = y - handle.bounds().top() - handle.offset().y;
+        let row = (f32::from(inside) / ROW).floor().max(0.) as usize;
+        Some(row.min(self.shown.len().checked_sub(1)?))
+    }
+
+    /// One step of a drag: scroll if the pointer is at an edge, then select up to the row
+    /// under it.
+    fn drag_to(&mut self, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        let handle = self.scroll.0.borrow().base_handle.clone();
+        let (bounds, offset) = (handle.bounds(), handle.offset());
+        let (above, below) = (
+            f32::from(bounds.top() + px(EDGE) - pointer.y),
+            f32::from(pointer.y - (bounds.bottom() - px(EDGE))),
+        );
+        // Faster the further past the edge, a few lines per tick at most.
+        let step = |past: f32| px((past / EDGE).clamp(0.2, 4.) * ROW);
+        let wanted = if above > 0. {
+            offset.y + step(above)
+        } else if below > 0. {
+            offset.y - step(below)
+        } else {
+            offset.y
+        };
+        let wanted = wanted.clamp(-handle.max_offset().y, px(0.));
+        if wanted != offset.y {
+            handle.set_offset(point(offset.x, wanted));
+            cx.notify();
+        }
+        if let (Some((anchor, head)), Some(row)) = (self.selection, self.row_at(pointer.y))
+            && head != row
+        {
+            self.selection = Some((anchor, row));
+            cx.notify();
+        }
     }
 
     /// Entries per level; continuation lines count with their entry, not on their own.
     fn count(&self, level: Option<Level>) -> usize {
         self.lines
             .iter()
-            .filter(|line| line.time.is_some() && level.is_none_or(|l| line.level == l))
+            .filter(|line| line.category.is_some() && level.is_none_or(|l| line.level == l))
             .count()
     }
 
@@ -166,7 +225,7 @@ impl Logs {
             Level::Debug => theme.muted_foreground,
         };
         let selected = self.selected().is_some_and(|rows| rows.contains(&ix));
-        let entry = line.time.is_some();
+        let entry = line.category.is_some();
         let cell = |width: f32| div().flex_none().w(px(width)).truncate();
         // ponytail: long lines are cut at the edge; wrap or scroll sideways if people miss it.
         div()
@@ -174,15 +233,19 @@ impl Logs {
             .flex()
             .items_center()
             .gap_3()
-            .h(px(22.))
+            .h(px(ROW))
+            // The whole width, so the hover and selection fills don't stop where the text does.
+            .w_full()
             .px_3()
             .when(selected, |this| this.bg(theme.selection))
             .when(!selected, |this| this.hover(|s| s.bg(theme.muted)))
-            .child(
-                cell(60.)
-                    .text_color(theme.muted_foreground)
-                    .children(line.time.clone()),
-            )
+            .when(self.timed, |this| {
+                this.child(
+                    cell(60.)
+                        .text_color(theme.muted_foreground)
+                        .children(line.time.clone()),
+                )
+            })
             .child(
                 cell(44.)
                     .text_color(color)
@@ -213,19 +276,25 @@ impl Logs {
                         Some((anchor, _)) if event.modifiers.shift => Some((anchor, ix)),
                         _ => Some((ix, ix)),
                     };
-                    this.dragging = true;
+                    // Follows the pointer from a timer, not from each row's mouse-move: that
+                    // only fires over a row, so the drag stalled at the list's edges and
+                    // never scrolled.
+                    this.drag = Some(cx.spawn_in(window, async move |this, cx| {
+                        loop {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(16))
+                                .await;
+                            let alive = this.update_in(cx, |this, window, cx| {
+                                this.drag_to(window.mouse_position(), cx)
+                            });
+                            if alive.is_err() {
+                                break;
+                            }
+                        }
+                    }));
                     cx.notify();
                 }),
             )
-            .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
-                if this.dragging
-                    && let Some((anchor, head)) = this.selection
-                    && head != ix
-                {
-                    this.selection = Some((anchor, ix));
-                    cx.notify();
-                }
-            }))
     }
 
     fn session_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -234,9 +303,15 @@ impl Logs {
             self.cachedir.clone(),
             self.session.path.clone(),
         );
-        Button::new("log-session")
-            .outline()
-            .small()
+        // In a tray of its own, like the level filter beside it, so it reads as a control
+        // and not as a loose label.
+        let picker = Button::new("log-session")
+            .ghost()
+            // Two px shorter than the tray, so its hover fill sits inside the border.
+            .h(CONTROL - px(4.))
+            .w_full()
+            .px_3()
+            .rounded(cx.theme().radius - px(2.))
             .cursor_pointer()
             .icon(if self.session.live {
                 Icon::new(IconName::Radio)
@@ -259,34 +334,59 @@ impl Logs {
                     );
                 }
                 menu
-            })
+            });
+        // The tray carries the fill and border; the button inside keeps the usual ghost hover,
+        // which painting a background on the button itself fought with.
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .h(CONTROL)
+            .w(SESSION)
+            .px(px(1.))
+            .rounded(cx.theme().radius)
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(picker)
     }
 
-    /// The level filter, each with its count; the raised pill slides to the chosen one.
+    /// The level filter, each with its count, as pills in a tray like the instance's tabs:
+    /// the chosen one filled with the accent, the fill sliding between them.
     fn levels(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        TabBar::new("log-levels")
-            .segmented()
-            .small()
+        // Pills of 26 px in the tray's 4 px of padding and its border: the bar's 36 px.
+        let tabs = TabBar::new("log-levels")
+            .pill()
             .selected_index(self.filter)
             .children(FILTERS.iter().enumerate().map(|(ix, (label, level))| {
                 let active = ix == self.filter;
-                Tab::new().label(*label).cursor_pointer().suffix(
-                    div()
-                        .text_xs()
-                        .text_color(match (active, level) {
-                            (true, Some(Level::Error)) => theme.danger,
-                            (true, Some(Level::Warn)) => theme.warning,
-                            (true, _) => theme.primary,
-                            _ => theme.muted_foreground,
-                        })
-                        .child(self.count(*level).to_string()),
+                // The count right after the name, inside the pill and in a quiet color. As the
+                // tab's suffix it sat against the pill's edge, where a close button goes.
+                let ink = if active {
+                    theme.primary_foreground.opacity(0.8)
+                } else {
+                    theme.muted_foreground
+                };
+                Tab::new().cursor_pointer().child(
+                    div().flex().items_baseline().gap_1p5().child(*label).child(
+                        div()
+                            .text_xs()
+                            .text_color(ink)
+                            .child(self.count(*level).to_string()),
+                    ),
                 )
             }))
             .on_click(cx.listener(|this, ix: &usize, _, cx| {
                 this.filter = *ix;
                 this.refilter(cx);
-            }))
+            }));
+        // Exactly the bar's height, whatever the pills measure, so it lines up with the
+        // session picker and the search field beside it.
+        crate::ui::tab_tray(tabs, cx)
+            .flex()
+            .items_center()
+            .h(CONTROL)
     }
 
     /// Why the list is empty: nothing written yet, or nothing passes the filter.
@@ -351,7 +451,7 @@ impl Logs {
                     .child(
                         Button::new("log-copy")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .cursor_pointer()
                             .icon(IconName::Copy)
                             .label(match selected {
@@ -363,7 +463,7 @@ impl Logs {
                     .child(
                         Button::new("log-open")
                             .ghost()
-                            .xsmall()
+                            .small()
                             .cursor_pointer()
                             .icon(IconName::ExternalLink)
                             .label("Open file")
@@ -394,19 +494,24 @@ impl Render for Logs {
                 .text_xs()
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                     let key = event.keystroke.key.as_str();
-                    if key == "c" && event.keystroke.modifiers.secondary(cx) {
+                    let command = event.keystroke.modifiers.secondary(cx);
+                    if key == "c" && command {
                         this.copy(cx);
+                    } else if key == "a" && command && !this.shown.is_empty() {
+                        // Every shown line: what the filter and the search left.
+                        this.selection = Some((0, this.shown.len() - 1));
+                        cx.notify();
                     } else if key == "escape" && this.selection.take().is_some() {
                         cx.notify();
                     }
                 }))
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.dragging = false),
+                    cx.listener(|this, _, _, _| this.drag = None),
                 )
                 .on_mouse_up_out(
                     MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.dragging = false),
+                    cx.listener(|this, _, _, _| this.drag = None),
                 )
                 // Scrolling decides whether we follow and whether "Latest" shows.
                 .on_scroll(cx.listener(|_, _, _, cx| cx.notify()))
@@ -453,11 +558,27 @@ impl Render for Logs {
                     .gap_3()
                     .child(self.session_picker(cx))
                     .child(self.levels(cx))
-                    .child(div().flex_1())
                     .child(
+                        // The input's own frame only comes in 32 or 44 px, so ours carries
+                        // the border at the bar's height and the input sits inside it bare.
                         div()
-                            .w(px(240.))
-                            .child(Input::new(&self.search).small().cleanable(true)),
+                            .flex_1()
+                            .min_w(px(160.))
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .h(CONTROL)
+                            .pl_3()
+                            .rounded(theme.radius)
+                            .bg(theme.background)
+                            .border_1()
+                            .border_color(theme.input)
+                            .child(
+                                Icon::new(IconName::Search)
+                                    .size_4()
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(Input::new(&self.search).appearance(false).cleanable(true)),
                     ),
             )
             .child(list)

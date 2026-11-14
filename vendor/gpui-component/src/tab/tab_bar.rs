@@ -282,7 +282,8 @@ impl TabBar {
                     div()
                         .size_full()
                         .bg(cx.theme().tokens.primary)
-                        .rounded(cx.theme().radius_full()),
+                        // lulo: the same radius as the pill tabs it sits behind.
+                        .rounded((cx.theme().radius - px(4.)).max(px(4.))),
                 ),
                 TabVariant::Underline => el.child(
                     div()

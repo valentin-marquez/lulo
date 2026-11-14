@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -13,7 +14,6 @@ use steam::workshop::Item;
 
 use crate::instance::{APP, branches, mods};
 use crate::shell::Shell;
-use crate::ui::Loader;
 
 pub const WIDTH: Pixels = px(320.);
 /// Below this window width the panel is left out: the page in the middle needs the room.
@@ -52,14 +52,37 @@ pub struct Feed {
 const BANNER_SHOT: usize = 2;
 const COVER_SHOT: usize = 0;
 
+/// Where the screenshots are kept, next to the instances.
+fn cache() -> PathBuf {
+    crate::instance::store::root()
+        .with_file_name("cache")
+        .join("game")
+}
+
+/// The file that names the last banner, so the next start shows it before Steam answers.
+fn banner_note() -> PathBuf {
+    cache().join("banner")
+}
+
+/// The banner the last run showed, if it is still in the cache. One small read, fine on the
+/// UI thread at start.
+pub fn cached_banner() -> Option<PathBuf> {
+    let name = std::fs::read_to_string(banner_note()).ok()?;
+    let name = name.trim();
+    // A plain file name in the cache, never a path out of it.
+    if std::path::Path::new(name).file_name() != Some(std::ffi::OsStr::new(name)) {
+        return None;
+    }
+    let path = cache().join(name);
+    path.is_file().then_some(path)
+}
+
 /// The game's screenshots from its Steam store page. They are fetched for whoever runs lulo
 /// and kept in its cache, never shipped with it; and they are scenes of the game, not its
 /// logo or its mascot, which lulo doesn't show (it is not an official tool).
 async fn screenshot(http: &steam::reqwest::Client, urls: &[String], ix: usize) -> Option<PathBuf> {
     let url = urls.get(ix).or(urls.first())?;
-    let cache = crate::instance::store::root()
-        .with_file_name("cache")
-        .join("game");
+    let cache = cache();
     // Named after the file on Steam, which changes when the picture does.
     let name: String = url
         .split('?')
@@ -95,17 +118,21 @@ pub async fn load() -> Feed {
                 .await
                 .unwrap_or_default();
             for item in items {
-                let picture = mods::picture(&http, &item).await;
+                let picture = mods::picture(&http, item.preview.as_deref()).await;
                 found.push(Trending { item, picture });
             }
         }
         let shots = steam::store::screenshots(&http, APP)
             .await
             .unwrap_or_default();
+        let banner = screenshot(&http, &shots, BANNER_SHOT).await;
+        if let Some(name) = banner.as_deref().and_then(|path| path.file_name()) {
+            let _ = std::fs::write(banner_note(), name.as_encoded_bytes());
+        }
         Feed {
             posts,
             mods: found,
-            banner: screenshot(&http, &shots, BANNER_SHOT).await,
+            banner,
             cover: screenshot(&http, &shots, COVER_SHOT).await,
         }
     })
@@ -120,6 +147,65 @@ fn compact(n: u32) -> String {
         1_000..1_000_000 => format!("{}.{}K", n / 1_000, n % 1_000 / 100),
         _ => format!("{}.{}M", n / 1_000_000, n % 1_000_000 / 100_000),
     }
+}
+
+/// A placeholder that fills its box while what goes there loads.
+fn shimmer(radius: Pixels) -> Skeleton {
+    Skeleton::new().size_full().rounded(radius)
+}
+
+/// The panel's shape before Steam answers: the lead picture, a few headlines and the trending
+/// rows, each at its real size, so nothing moves when the feed lands.
+fn waiting(cx: &App) -> Div {
+    let theme = cx.theme();
+    let line = |width: f32| {
+        Skeleton::new()
+            .h(px(12.))
+            .w(relative(width))
+            .rounded(px(4.))
+    };
+    let posts = (0..POSTS - 1).map(move |ix| {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1p5()
+            .p_2()
+            .child(line(if ix % 2 == 0 { 0.9 } else { 0.7 }))
+            .child(line(0.3))
+    });
+    let mods = (0..MODS).map(move |_| {
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .p_2()
+            .child(div().flex_none().size(px(44.)).child(shimmer(px(8.))))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .gap_1p5()
+                    .child(line(0.8))
+                    .child(line(0.4)),
+            )
+    });
+    div()
+        .flex()
+        .flex_col()
+        .child(heading("NEWS", cx))
+        .child(
+            div()
+                .h(px(166.))
+                .mx_2()
+                .mb_2()
+                .mt_1()
+                .child(shimmer(theme.radius_lg)),
+        )
+        .children(posts)
+        .child(div().h_3())
+        .child(heading("TRENDING MODS THIS WEEK", cx))
+        .children(mods)
 }
 
 fn heading(text: &'static str, cx: &App) -> Div {
@@ -147,6 +233,7 @@ fn lead(newest: &Post, cover: Option<PathBuf>, cx: &App) -> Stateful<Div> {
         return post(0, newest, cx);
     };
     let url = newest.url.clone();
+    let radius = theme.radius_lg;
     div()
         .id("post-lead")
         .relative()
@@ -166,7 +253,8 @@ fn lead(newest: &Post, cover: Option<PathBuf>, cx: &App) -> Stateful<Div> {
                 .left_0()
                 .size_full()
                 .rounded(theme.radius_lg)
-                .object_fit(ObjectFit::Cover),
+                .object_fit(ObjectFit::Cover)
+                .with_loading(move || shimmer(radius).into_any_element()),
         )
         .child(
             div()
@@ -252,7 +340,8 @@ fn trending(
             img(path.clone())
                 .size_full()
                 .rounded(px(8.))
-                .object_fit(ObjectFit::Cover),
+                .object_fit(ObjectFit::Cover)
+                .with_loading(|| shimmer(px(8.)).into_any_element()),
         ),
         None => div()
             .flex()
@@ -421,10 +510,7 @@ pub fn render(
         .p_3()
         .gap_1();
     let Some(feed) = feed else {
-        return panel
-            .gap_3()
-            .child(Loader)
-            .child(note("Catching up with Steam", cx));
+        return panel.child(waiting(cx));
     };
     let news = match feed.posts.split_first() {
         None => div().child(note("No news got through. Steam may be napping", cx)),

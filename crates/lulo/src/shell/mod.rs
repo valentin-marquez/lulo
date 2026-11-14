@@ -45,6 +45,8 @@ pub struct Shell {
     running: HashMap<SharedString, std::process::Child>,
     /// News and trending mods for the panel on the right; `None` until Steam answers.
     feed: Option<crate::discover::Feed>,
+    /// The banner the last run showed, for the Library until the feed lands.
+    cached_banner: Option<std::path::PathBuf>,
     /// Scroll position of the panel's trending list, eased by `ui::smooth_scroll`.
     feed_scroll: ScrollHandle,
     /// Shows the loader under the title bar while the page's data loads.
@@ -74,6 +76,7 @@ impl Shell {
         .detach();
         let mut shell = Self {
             feed: None,
+            cached_banner: crate::discover::cached_banner(),
             feed_scroll: ScrollHandle::new(),
             account: None,
             latest: HashMap::new(),
@@ -118,8 +121,14 @@ impl Shell {
     }
 
     /// The game screenshot for the Library's banner, once it has been fetched.
-    pub fn banner(&self) -> Option<std::path::PathBuf> {
-        self.feed.as_ref()?.banner.clone()
+    /// `None` while the feed is being asked for and no earlier banner is cached; then the
+    /// screenshot, when one came.
+    pub fn banner(&self) -> Option<Option<std::path::PathBuf>> {
+        match (&self.feed, &self.cached_banner) {
+            (Some(feed), _) => Some(feed.banner.clone()),
+            (None, Some(cached)) => Some(Some(cached.clone())),
+            (None, None) => None,
+        }
     }
 
     pub fn instances(&self) -> &[Instance] {
@@ -316,8 +325,10 @@ impl Shell {
         let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         let name = instance.name.clone();
         let cancel = install::start(account, instance, events_tx);
-        self.installs
-            .insert(id.clone(), install::Download::new(name, cancel));
+        self.installs.insert(
+            id.clone(),
+            install::Download::new(name, install::Kind::Game, Some(cancel)),
+        );
         self.changed(cx);
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.recv().await {
@@ -370,20 +381,35 @@ impl Shell {
         window: AnyWindowHandle,
         cx: &mut Context<Self>,
     ) {
+        self.add_mods(instance, vec![item], None, window, cx);
+    }
+
+    /// Downloads Workshop items `items` into `instance` as one entry of the download manager.
+    /// `collection` names where they came from, for the note at the end.
+    pub fn add_mods(
+        &mut self,
+        instance: Instance,
+        items: Vec<u64>,
+        collection: Option<SharedString>,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
         use gpui_kit::component::WindowExt;
-        let key = mod_key(&instance.id, &item.to_string());
+        let Some(first) = items.first() else { return };
+        let key = mod_key(&instance.id, &first.to_string());
         if self.installs.contains_key(&key) {
             return;
         }
         let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         let task = crate::runtime::spawn(instance::mods::install(
             instance,
-            item,
+            items,
             move |title, done, total| {
                 let _ = events_tx.send((SharedString::from(title.to_owned()), done, total));
             },
         ));
-        let download = install::Download::new("Workshop mod".into(), task.abort_handle());
+        let name = collection.clone().unwrap_or_else(|| "Workshop mod".into());
+        let download = install::Download::new(name, install::Kind::Mods, Some(task.abort_handle()));
         self.installs.insert(key.clone(), download);
         self.changed(cx);
         cx.spawn(async move |this, cx| {
@@ -406,10 +432,15 @@ impl Shell {
                 shell.changed(cx);
             });
             let note = match added {
-                Ok(Ok(added)) => crate::ui::toast::done(match added.with.len() {
-                    0 => format!("{} is in! Ready for your next run", added.title),
-                    1 => format!("{} is in, with the mod it needs", added.title),
-                    many => format!("{} is in, with the {many} mods it needs", added.title),
+                Ok(Ok(added)) => crate::ui::toast::done(match (&collection, added.with.len()) {
+                    (Some(name), many) => {
+                        format!("{name} is in! All {} mods are ready to go", many + 1)
+                    }
+                    (None, 0) => format!("{} is in! Ready for your next run", added.title),
+                    (None, 1) => format!("{} is in, with the mod it needs", added.title),
+                    (None, many) => {
+                        format!("{} is in, with the {many} mods it needs", added.title)
+                    }
                 }),
                 Ok(Err(why)) => crate::ui::toast::failed_because("That mod didn't make it", why),
                 // Cancelled from the download manager: nothing to say.
@@ -532,7 +563,8 @@ impl Shell {
 
     /// Deletes instance `id` with its saves and mods, and goes back to the Library. Refused
     /// while the game runs or an install writes into it. The instance leaves the list at once;
-    /// its files (gigabytes, with an own game copy) go in the background.
+    /// its files (gigabytes, with its mods) go in the background, shown in the download
+    /// manager with the space freed.
     pub fn remove(
         &mut self,
         id: &SharedString,
@@ -550,19 +582,42 @@ impl Shell {
         self.page = Page::Library;
         self.changed(cx);
         let name = instance.name.clone();
-        window.push_notification(
-            crate::ui::toast::working(format!("Sweeping away {name}")),
-            cx,
+        let key: SharedString = format!("delete:{id}").into();
+        self.installs.insert(
+            key.clone(),
+            install::Download::new(name.clone(), install::Kind::Delete, None),
         );
+        let (events_tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         let (root, handle) = (self.root.clone(), window.window_handle());
-        cx.spawn(async move |this, cx| {
-            let deleted = crate::runtime::blocking(move || {
-                store::delete(&root, &instance.dir).map_err(|err| err.to_string())
+        // Spawned now: `blocking` only starts when awaited, and the loop below waits on the
+        // progress it sends.
+        let deleting = crate::runtime::spawn(crate::runtime::blocking(move || {
+            store::delete(&root, &instance.dir, |freed, total| {
+                let _ = events_tx.send((freed, total));
             })
-            .await
-            .and_then(|result| result);
+            .map_err(|err| err.to_string())
+        }));
+        cx.spawn(async move |this, cx| {
+            // The sender lives in the deletion: this loop ends when it does.
+            while let Some((freed, total)) = events.recv().await {
+                let _ = this.update(cx, |shell, cx| {
+                    if let Some(task) = shell.installs.get_mut(&key)
+                        && task.progress(freed, total, std::time::Instant::now())
+                    {
+                        shell.changed(cx);
+                    }
+                });
+            }
+            let deleted = deleting
+                .await
+                .map_err(|err| err.to_string())
+                .and_then(|result| result)
+                .and_then(|result| result);
             // Whatever happened, show what is on disk now.
-            let _ = this.update(cx, |shell, cx| shell.reload(cx));
+            let _ = this.update(cx, |shell, cx| {
+                shell.installs.remove(&key);
+                shell.reload(cx);
+            });
             let toast = match deleted {
                 Ok(()) => crate::ui::toast::done(format!("Poof! {name} is gone")),
                 Err(err) => crate::ui::toast::failed_because("That instance wouldn't budge", err),
@@ -639,11 +694,16 @@ impl Shell {
         };
         instance::create::open(
             root,
-            move |created, window, cx| {
+            move |created, mods, window, cx| {
+                let handle = window.window_handle();
                 let _ = shell.update(cx, |shell, cx| {
                     shell.instances = store::list(&shell.root);
                     let ix = shell.instances.iter().position(|i| i.id == created.id);
                     shell.go(ix.map_or(Page::Library, Page::Instance), cx);
+                    // Mods download anonymously, alongside the game.
+                    if let Some((collection, items)) = mods {
+                        shell.add_mods(created.clone(), items, Some(collection), handle, cx);
+                    }
                 });
                 // A new instance has nothing to run yet: start its install right away, as its
                 // main button would (it asks to sign in to Steam first when nobody is).

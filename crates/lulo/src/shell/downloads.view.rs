@@ -1,7 +1,7 @@
-//! Download manager: a pill in the title bar whose fill is the overall progress, opening a
-//! panel with every download, games and mods (bar, size, speed, time left, cancel). Modrinth
-//! App's pattern. It is always there, apart from what is running, so there is one place to
-//! look for downloads whether or not any is going.
+//! Task manager: a pill in the title bar whose fill is the overall progress, opening a panel
+//! with every task: game and mod downloads and instance deletions (bar, size, speed, time
+//! left, cancel when it can stop). Modrinth App's pattern. It is always there, apart from
+//! what is running, so there is one place to look whether or not anything is going.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable;
@@ -41,7 +41,7 @@ impl Pill {
             Summary {
                 title: match all.as_slice() {
                     [(_, only)] => only.name.clone(),
-                    many => format!("{} downloads", many.len()).into(),
+                    many => format!("{} tasks", many.len()).into(),
                 },
                 fraction: pct as f32 / 100.,
                 pct,
@@ -115,10 +115,11 @@ impl RenderOnce for Trigger {
             return pill
                 .text_color(theme.muted_foreground)
                 .child(Icon::new(IconName::Download).size_4())
-                .child("Downloads");
+                .child("Tasks");
         };
         pill
-            // The fill behind the content is the progress bar.
+            // The fill behind the content is the progress bar. GPUI clips to the pill's box,
+            // not its rounded outline, so the fill rounds its own ends to stay inside it.
             .child(
                 div()
                     .absolute()
@@ -126,6 +127,8 @@ impl RenderOnce for Trigger {
                     .left_0()
                     .h_full()
                     .w(relative(s.fraction))
+                    .rounded_l_full()
+                    .when(s.fraction > 0.95, |this| this.rounded_r_full())
                     .bg(theme.primary.opacity(0.18)),
             )
             .child(
@@ -176,14 +179,14 @@ fn panel(shell: &WeakEntity<Shell>, cx: &mut App) -> AnyElement {
             div()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child("Downloads"),
+                .child("Tasks"),
         )
         .when(rows.is_empty(), |this| {
             this.child(
                 div()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child("All quiet. Games and mods you download show up here."),
+                    .child("All quiet. Downloads and deletions show up here."),
             )
         })
         .children(rows)
@@ -196,11 +199,28 @@ fn row(
     shell: WeakEntity<Shell>,
     theme: &gpui_kit::component::Theme,
 ) -> AnyElement {
+    use install::Kind;
+    let (icon, doing, freed) = match download.kind {
+        Kind::Game => (IconName::Box, "Downloading game", ""),
+        Kind::Mods => (IconName::Puzzle, "Downloading mods", ""),
+        Kind::Delete => (IconName::Trash, "Deleting", " freed"),
+    };
     let sizes = format!(
-        "{} of {}",
+        "{} of {}{freed}",
         install::size(download.done),
         install::size(download.total)
     );
+    let cancel = download.can_cancel().then(|| {
+        Button::new(SharedString::from(format!("cancel-{id}")))
+            .ghost()
+            .xsmall()
+            .icon(IconName::Close)
+            .tooltip("Cancel")
+            .cursor_pointer()
+            .on_click(move |_, _, cx| {
+                let _ = shell.update(cx, |shell, cx| shell.cancel(&id, cx));
+            })
+    });
     div()
         .flex()
         .gap_3()
@@ -216,7 +236,7 @@ fn row(
                 .border_1()
                 .border_color(theme.border)
                 .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::Box).size_4()),
+                .child(Icon::new(icon).size_4()),
         )
         .child(
             div()
@@ -247,20 +267,10 @@ fn row(
                                     div()
                                         .text_xs()
                                         .text_color(theme.muted_foreground)
-                                        .child("Downloading game"),
+                                        .child(doing),
                                 ),
                         )
-                        .child(
-                            Button::new(SharedString::from(format!("cancel-{id}")))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Close)
-                                .tooltip("Cancel")
-                                .cursor_pointer()
-                                .on_click(move |_, _, cx| {
-                                    let _ = shell.update(cx, |shell, cx| shell.cancel(&id, cx));
-                                }),
-                        ),
+                        .children(cancel),
                 )
                 .child(
                     Progress::new(SharedString::from(format!("bar-{}", download.name)))

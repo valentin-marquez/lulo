@@ -3,12 +3,14 @@
 //! tab).
 
 use std::collections::HashSet;
+use std::ops::Range;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme, Icon, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -71,6 +73,11 @@ pub struct Mods {
     instance: Instance,
     /// Read from disk when the tab opens and after every change.
     mods: Vec<Mod>,
+    /// What [`mods::stamp`] said when `mods` was read; the same stamp means nothing new.
+    stamp: mods::Stamp,
+    /// A read is running in the background; `stale` asks for one more after it.
+    loading: bool,
+    stale: bool,
     search: Entity<InputState>,
     sort: Sort,
     filter: Filter,
@@ -78,7 +85,7 @@ pub struct Mods {
     selected: HashSet<String>,
     shell: WeakEntity<Shell>,
     /// The table's scroll position, eased by `ui::smooth_scroll`.
-    scroll: ScrollHandle,
+    scroll: UniformListScrollHandle,
     _search: Subscription,
 }
 
@@ -96,6 +103,9 @@ impl Mods {
             }
         });
         Self {
+            stamp: mods::stamp(&instance),
+            loading: false,
+            stale: false,
             mods: mods::list(&instance),
             instance,
             search,
@@ -103,18 +113,43 @@ impl Mods {
             filter: Filter::All,
             selected: HashSet::new(),
             shell,
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
             _search: on_search,
         }
     }
 
-    /// Reads the mods from disk again; the shell calls it as downloads move and end.
+    /// Reads the mods from disk again when they changed; the shell calls it on every step of
+    /// a download. The read goes to the background (a collection is hundreds of `mod.info`
+    /// files) and only one runs at a time.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.mods = mods::list(&self.instance);
-        // A mod that is gone can't stay checked.
-        self.selected
-            .retain(|folder| self.mods.iter().any(|m| m.folder == *folder));
-        cx.notify();
+        let stamp = mods::stamp(&self.instance);
+        if stamp == self.stamp {
+            return;
+        }
+        if self.loading {
+            self.stale = true;
+            return;
+        }
+        self.loading = true;
+        let instance = self.instance.clone();
+        cx.spawn(async move |this, cx| {
+            let found = crate::runtime::blocking(move || mods::list(&instance)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.loading = false;
+                if let Ok(found) = found {
+                    this.mods = found;
+                    this.stamp = stamp;
+                    // A mod that is gone can't stay checked.
+                    this.selected
+                        .retain(|folder| this.mods.iter().any(|m| m.folder == *folder));
+                    cx.notify();
+                }
+                if std::mem::take(&mut this.stale) {
+                    this.refresh(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     fn shown(&self, cx: &App) -> Vec<&Mod> {
@@ -346,7 +381,14 @@ impl Mods {
                 img(path.clone())
                     .size_full()
                     .rounded(px(8.))
-                    .object_fit(ObjectFit::Cover),
+                    .object_fit(ObjectFit::Cover)
+                    // Pictures decode as rows scroll into view.
+                    .with_loading(|| {
+                        Skeleton::new()
+                            .size_full()
+                            .rounded(px(8.))
+                            .into_any_element()
+                    }),
             ),
             None => div()
                 .flex()
@@ -390,6 +432,8 @@ impl Mods {
         let (id, folder, pick) = (item.id.clone(), item.folder.clone(), item.folder.clone());
         let (dir, mod_id, workshop) = (item.dir.clone(), item.id.clone(), item.workshop);
         div()
+            // A uniform list doesn't stretch its rows like a flex column did.
+            .w_full()
             .flex()
             .items_center()
             .gap_3()
@@ -579,7 +623,8 @@ impl Mods {
 
 impl Render for Mods {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        ui::smooth_scroll("mods-scroll", &self.scroll, window, cx);
+        let base = self.scroll.0.borrow().base_handle.clone();
+        ui::smooth_scroll("mods-scroll", &base, window, cx);
         let adding = self
             .shell
             .read_with(cx, |shell, _| shell.adding_mods(&self.instance.id))
@@ -638,12 +683,6 @@ impl Render for Mods {
             )
             .into_any_element()
         } else {
-            let last = shown.len() - 1;
-            let rows: Vec<AnyElement> = shown
-                .iter()
-                .enumerate()
-                .map(|(ix, item)| self.row(item, ix == last, cx))
-                .collect();
             div()
                 .flex()
                 .flex_col()
@@ -654,15 +693,29 @@ impl Render for Mods {
                 .bg(cx.theme().background)
                 .overflow_hidden()
                 .child(self.header(&shown, cx))
+                // Only the rows in view are built: a collection brings hundreds of mods, each
+                // with a picture to decode.
                 .child(
-                    div()
-                        .id("mods-list")
-                        .flex()
-                        .flex_col()
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll)
-                        .children(rows),
+                    uniform_list(
+                        "mods-list",
+                        shown.len(),
+                        cx.processor(|this, range: Range<usize>, _, cx| {
+                            let shown = this.shown(cx);
+                            let last = shown.len().saturating_sub(1);
+                            let picked: Vec<(usize, Mod)> = range
+                                .filter_map(|ix| shown.get(ix).map(|m| (ix, (*m).clone())))
+                                .collect();
+                            picked
+                                .iter()
+                                .map(|(ix, item)| this.row(item, *ix == last, cx))
+                                .collect()
+                        }),
+                    )
+                    // Rows times their height, capped by the room left: the table hugs a short
+                    // list and scrolls a long one. The default sizing gives it no height at all.
+                    .with_sizing_behavior(ListSizingBehavior::Infer)
+                    .track_scroll(&self.scroll)
+                    .min_h_0(),
                 )
                 .into_any_element()
         };

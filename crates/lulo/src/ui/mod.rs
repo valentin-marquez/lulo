@@ -50,6 +50,17 @@ pub fn hovered(color: Hsla, cx: &App) -> Hsla {
     }
 }
 
+/// Warning text. The palette's amber is a fill color: as text on a light surface it barely
+/// reads, so there it turns a dark orange (Tailwind's orange 700, about 5:1 on white).
+pub fn warning_text(cx: &App) -> Hsla {
+    let theme = cx.theme();
+    if theme.is_dark() {
+        theme.warning
+    } else {
+        gpui_kit::rgb(0xc2410c).into()
+    }
+}
+
 /// `from` moved `t` of the way to `to`; springs drive `t`, so colors ease without linear timing.
 pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
     let t = t.clamp(0., 1.);
@@ -236,10 +247,6 @@ pub mod toast {
     /// Something worked, with a catch the user should know about.
     pub fn heads_up(what: &'static str, detail: impl ToString) -> Notification {
         Notification::warning(detail.to_string()).title(what)
-    }
-
-    pub fn working(text: impl Into<SharedString>) -> Notification {
-        Notification::info(text)
     }
 }
 

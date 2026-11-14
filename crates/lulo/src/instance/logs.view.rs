@@ -218,13 +218,7 @@ impl Logs {
         let line = &self.lines[self.shown[ix]];
         let color = match line.level {
             Level::Error => theme.danger,
-            // The palette's amber is a fill color: as text on a light surface it barely
-            // reads, so there it keeps its hue and gets darker (about 5:1 on white).
-            Level::Warn if theme.mode.is_dark() => theme.warning,
-            Level::Warn => Hsla {
-                l: theme.warning.l * 0.6,
-                ..theme.warning
-            },
+            Level::Warn => crate::ui::warning_text(cx),
             Level::Info => theme.foreground,
             Level::Debug => theme.muted_foreground,
         };

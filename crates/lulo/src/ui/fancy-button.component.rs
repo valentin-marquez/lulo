@@ -50,6 +50,7 @@ pub struct FancyButton {
     size: Size,
     danger: bool,
     width: Option<Pixels>,
+    disabled: bool,
     on_click: Option<ClickHandler>,
 }
 
@@ -64,6 +65,7 @@ impl FancyButton {
             size: Size::default(),
             danger: false,
             width: None,
+            disabled: false,
             on_click: None,
         }
     }
@@ -82,6 +84,12 @@ impl FancyButton {
     /// A fixed width, for a button whose label changes and must not push what is beside it.
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    /// Shown at half opacity, with no hover, press or click, for an action not ready yet.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
         self
     }
 
@@ -147,28 +155,33 @@ impl RenderOnce for FancyButton {
             .text_color(foreground)
             .text_sm()
             .font_weight(FontWeight::SEMIBOLD)
-            .cursor_pointer()
-            .on_hover(move |is_hovered, window, cx| {
-                hovered.update(cx, |h, _| *h = *is_hovered);
-                window.refresh();
-            })
-            .on_mouse_down(MouseButton::Left, {
-                let pressed = pressed.clone();
-                move |_, window, cx| {
-                    pressed.update(cx, |p, _| *p = true);
-                    window.refresh();
+            .map(|this| {
+                if self.disabled {
+                    return this.opacity(0.5).cursor_default();
                 }
-            })
-            .on_mouse_up(MouseButton::Left, {
-                let pressed = pressed.clone();
-                move |_, window, cx| {
-                    pressed.update(cx, |p, _| *p = false);
-                    window.refresh();
-                }
-            })
-            .on_mouse_up_out(MouseButton::Left, move |_, window, cx| {
-                pressed.update(cx, |p, _| *p = false);
-                window.refresh();
+                this.cursor_pointer()
+                    .on_hover(move |is_hovered, window, cx| {
+                        hovered.update(cx, |h, _| *h = *is_hovered);
+                        window.refresh();
+                    })
+                    .on_mouse_down(MouseButton::Left, {
+                        let pressed = pressed.clone();
+                        move |_, window, cx| {
+                            pressed.update(cx, |p, _| *p = true);
+                            window.refresh();
+                        }
+                    })
+                    .on_mouse_up(MouseButton::Left, {
+                        let pressed = pressed.clone();
+                        move |_, window, cx| {
+                            pressed.update(cx, |p, _| *p = false);
+                            window.refresh();
+                        }
+                    })
+                    .on_mouse_up_out(MouseButton::Left, move |_, window, cx| {
+                        pressed.update(cx, |p, _| *p = false);
+                        window.refresh();
+                    })
             })
             // The face: fill, ring, shadow, gloss and highlight, inset while pressed.
             .child(
@@ -226,6 +239,8 @@ impl RenderOnce for FancyButton {
                     .map(|icon| div().relative().mx(px(-4.)).child(icon.size_5())),
             )
             .child(div().relative().child(self.label))
-            .when_some(self.on_click, |this, handler| this.on_click(handler))
+            .when_some(self.on_click.filter(|_| !self.disabled), |this, handler| {
+                this.on_click(handler)
+            })
     }
 }

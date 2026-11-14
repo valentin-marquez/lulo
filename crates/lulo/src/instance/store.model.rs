@@ -203,7 +203,9 @@ pub fn configure(dir: &Path, settings: &Settings) -> io::Result<()> {
 }
 
 /// Deletes the instance with its saves and mods, and any shared build nothing else runs.
-pub fn delete(root: &Path, dir: &Path) -> io::Result<()> {
+/// `progress` gets the bytes freed so far and in all: an instance with its mods can be tens of
+/// GB, so the files go one by one instead of in one `remove_dir_all` that says nothing.
+pub fn delete(root: &Path, dir: &Path, mut progress: impl FnMut(u64, u64)) -> io::Result<()> {
     // Only an instance folder directly under the root: never an arbitrary path.
     if dir.parent() != Some(root) || !dir.join(FILE).is_file() {
         return Err(io::Error::new(
@@ -214,8 +216,39 @@ pub fn delete(root: &Path, dir: &Path) -> io::Result<()> {
     // The manifest goes first: from then on the instance is no longer listed, however long
     // the rest takes or if it is cut short.
     std::fs::remove_file(dir.join(FILE))?;
+    let (files, total) = files(dir)?;
+    let (mut freed, mut told) = (0, 0);
+    for (ix, (path, size)) in files.iter().enumerate() {
+        std::fs::remove_file(path)?;
+        freed += size;
+        // Often enough to move the bar, not once per file of a mod with thousands.
+        if freed - told >= 32 << 20 || ix % 256 == 0 {
+            progress(freed, total);
+            told = freed;
+        }
+    }
+    progress(total, total);
+    // Only folders are left.
     std::fs::remove_dir_all(dir)?;
     prune(root)
+}
+
+/// Every file under `dir` (links as themselves, never followed) with its size, and their sum.
+fn files(dir: &Path) -> io::Result<(Vec<(PathBuf, u64)>, u64)> {
+    let (mut files, mut total, mut stack) = (Vec::new(), 0, vec![dir.to_owned()]);
+    while let Some(next) = stack.pop() {
+        for entry in std::fs::read_dir(next)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                stack.push(entry.path());
+            } else {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                total += size;
+                files.push((entry.path(), size));
+            }
+        }
+    }
+    Ok((files, total))
 }
 
 /// Records that the instance was just played.
@@ -405,8 +438,14 @@ mod tests {
         set_build(&b.dir, 2).unwrap();
         std::fs::write(a.dir.join("zomboid/save.txt"), "x").unwrap();
 
-        delete(&root, &a.dir).unwrap();
+        let mut seen = Vec::new();
+        delete(&root, &a.dir, |freed, total| seen.push((freed, total))).unwrap();
         assert!(!a.dir.exists());
+        assert_eq!(
+            seen.last(),
+            Some(&(1, 1)),
+            "the save's one byte, all freed: {seen:?}"
+        );
         assert!(!builds.join("1").exists());
         assert!(builds.join("2").is_dir());
         assert_eq!(list(&root).len(), 1);
@@ -415,7 +454,7 @@ mod tests {
         let outside = root.parent().unwrap().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
         for target in [root.clone(), root.join("nothing"), outside.clone()] {
-            assert!(delete(&root, &target).is_err());
+            assert!(delete(&root, &target, |_, _| {}).is_err());
         }
         assert!(root.is_dir() && outside.is_dir());
 

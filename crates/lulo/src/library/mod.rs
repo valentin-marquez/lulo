@@ -7,6 +7,7 @@ use gpui_kit::base::spring;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
+use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -512,13 +513,26 @@ fn card(
 
 /// The page's title. With a screenshot of the game it is a banner: the picture, darkened
 /// toward the left so the title reads over it; without it (offline, first run) just the title.
-fn banner(total: usize, hero: Option<std::path::PathBuf>, cx: &App) -> Div {
+/// `hero` is `None` while the screenshot is being fetched: the banner already takes its
+/// place, as a skeleton, so the page doesn't jump when it lands.
+fn banner(total: usize, hero: Option<Option<std::path::PathBuf>>, cx: &App) -> Div {
     let theme = cx.theme();
-    let Some(hero) = hero else {
-        return div()
-            .text_xl()
-            .font_weight(FontWeight::BOLD)
-            .child("Library");
+    let hero = match hero {
+        Some(None) => {
+            return div()
+                .text_xl()
+                .font_weight(FontWeight::BOLD)
+                .child("Library");
+        }
+        Some(Some(hero)) => Some(hero),
+        None => None,
+    };
+    let radius = theme.radius_lg;
+    let skeleton = move || {
+        Skeleton::new()
+            .size_full()
+            .rounded(radius)
+            .into_any_element()
     };
     // Just how many: some may not be installed yet, so it claims nothing more.
     let count = match total {
@@ -532,13 +546,20 @@ fn banner(total: usize, hero: Option<std::path::PathBuf>, cx: &App) -> Div {
         .rounded(theme.radius_lg)
         .overflow_hidden()
         .child(
-            img(hero)
+            div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .size_full()
-                .rounded(theme.radius_lg)
-                .object_fit(ObjectFit::Cover),
+                .child(match hero {
+                    Some(hero) => img(hero)
+                        .size_full()
+                        .rounded(radius)
+                        .object_fit(ObjectFit::Cover)
+                        .with_loading(skeleton)
+                        .into_any_element(),
+                    None => skeleton(),
+                }),
         )
         // Darkens the lower part, where the title sits, whatever the picture has there.
         .child(

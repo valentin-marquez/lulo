@@ -21,21 +21,34 @@ pub enum Event {
     Failed(String),
 }
 
-/// An install in progress, as the download manager shows it.
+/// What a task in the download manager is doing.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    Game,
+    Mods,
+    /// Deleting an instance: bytes freed instead of downloaded, and no cancel, since half a
+    /// deleted instance is worth less than none.
+    Delete,
+}
+
+/// An install (or a deletion) in progress, as the download manager shows it.
 pub struct Download {
     pub name: SharedString,
+    pub kind: Kind,
     pub done: u64,
     pub total: u64,
     /// Bytes per second over the last second or so; 0 until measured.
     pub speed: u64,
     sample: Option<(Instant, u64)>,
-    cancel: tokio::task::AbortHandle,
+    cancel: Option<tokio::task::AbortHandle>,
 }
 
 impl Download {
-    pub fn new(name: SharedString, cancel: tokio::task::AbortHandle) -> Self {
+    /// `cancel` stops it; `None` for what can't be stopped halfway.
+    pub fn new(name: SharedString, kind: Kind, cancel: Option<tokio::task::AbortHandle>) -> Self {
         Self {
             name,
+            kind,
             done: 0,
             total: 0,
             speed: 0,
@@ -83,8 +96,14 @@ impl Download {
         })
     }
 
+    pub fn can_cancel(&self) -> bool {
+        self.cancel.is_some()
+    }
+
     pub fn cancel(&self) {
-        self.cancel.abort();
+        if let Some(cancel) = &self.cancel {
+            cancel.abort();
+        }
     }
 }
 
@@ -277,7 +296,7 @@ mod tests {
     #[test]
     fn speed_skips_kept_files_and_estimates_time_left() {
         let cancel = runtime::spawn(async {}).abort_handle();
-        let mut download = Download::new("a".into(), cancel);
+        let mut download = Download::new("a".into(), Kind::Game, Some(cancel));
         let start = Instant::now();
         // 500 MB kept from an earlier install arrive at once; they are not download speed.
         download.progress(500_000_000, 1_000_000_000, start);

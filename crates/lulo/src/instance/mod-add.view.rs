@@ -229,7 +229,7 @@ impl AddMod {
                             .items_center()
                             .gap_2()
                             .text_sm()
-                            .text_color(theme.warning)
+                            .text_color(ui::warning_text(cx))
                             .child(Icon::new(IconName::TriangleAlert).size_4().flex_none())
                             .child(format!(
                                 "Heads up! It's for {build} only, not this instance's"

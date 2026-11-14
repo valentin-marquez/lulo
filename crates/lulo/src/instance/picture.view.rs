@@ -1,11 +1,13 @@
 //! An instance's picture and the controls that change it: upload one, pick at random, or
-//! choose a game item and a color. The create dialog shows the short form; the instance's
-//! settings show all of it.
+//! choose a game item and a color. The create dialog shows the picture beside the name field,
+//! with the palette in a popover; the instance's settings show the palette beside it.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Icon as Glyph, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -21,8 +23,10 @@ pub struct Picker {
     pub icon: Icon,
     /// The icon theme the palette shows.
     theme: usize,
-    /// Whether the items and colors show under the picture.
+    /// Whether the items and colors show beside the picture.
     full: bool,
+    /// The name field the short form shows beside the picture, above its buttons.
+    name: Option<Entity<InputState>>,
 }
 
 impl Picker {
@@ -32,7 +36,14 @@ impl Picker {
             icon: icon.unwrap_or_else(|| Icon::picked(&seed())),
             theme: 0,
             full,
+            name: None,
         }
+    }
+
+    /// Shows `name` beside the picture, with the buttons under it in a row.
+    pub fn with_name(mut self, name: Entity<InputState>) -> Self {
+        self.name = Some(name);
+        self
     }
 
     /// Asks the OS for a picture to use as the icon.
@@ -60,7 +71,8 @@ impl Picker {
         .detach();
     }
 
-    /// The picture with Upload and Randomize beside it.
+    /// The picture with its buttons: under it beside the palette (settings), or beside it
+    /// under the name field, with Customize opening the palette (the create dialog).
     fn preview(&self, cx: &mut Context<Self>) -> Div {
         let preview = Instance {
             memory_gb: None,
@@ -74,52 +86,79 @@ impl Picker {
             last_played: None,
             icon: Some(self.icon.clone()),
         };
-        // Beside the palette the buttons go under the picture, at its width; on their own
-        // (the create dialog) they sit beside it.
-        let full = self.full;
         let button = |id: &'static str, icon: IconName, label: &'static str| {
             Button::new(id)
-                .ghost()
+                .outline()
                 .cursor_pointer()
                 .h(px(34.))
-                .w(px(if full { ART } else { 148. }))
                 .icon(icon)
                 .label(label)
         };
-        div()
-            .flex()
-            .flex_none()
-            .map(|this| match full {
-                true => this.flex_col().items_start(),
-                false => this.items_center(),
-            })
-            .gap_3()
-            // Icon swap: a new picture fades in rising 4 px (GPUI can't scale or blur a box).
-            .child(
-                art::art(&preview, ART, cx.theme().radius_lg, cx).with_animation(
-                    ElementId::Name(format!("icon-{:?}", self.icon).into()),
-                    Animation::new(crate::ui::ENTER).with_easing(crate::ui::ease_out_quint),
-                    |art, t| art.relative().top(px(4. * (1. - t))).opacity(t),
-                ),
-            )
-            .child(
+        let upload = button("icon-upload", IconName::Download, "Upload")
+            .on_click(cx.listener(|this, _, _, cx| this.upload(cx)));
+        let random = button("icon-random", IconName::LoaderCircle, "Randomize").on_click(
+            cx.listener(|this, _, _, cx| {
+                this.icon = Icon::picked(&seed());
+                cx.notify();
+            }),
+        );
+        // Icon swap: a new picture fades in rising 4 px (GPUI can't scale or blur a box).
+        let art = art::art(&preview, ART, cx.theme().radius_lg, cx).with_animation(
+            ElementId::Name(format!("icon-{:?}", self.icon).into()),
+            Animation::new(crate::ui::ENTER).with_easing(crate::ui::ease_out_quint),
+            |art, t| art.relative().top(px(4. * (1. - t))).opacity(t),
+        );
+        let row = div().flex().flex_none().gap_4().child(art);
+        let Some(name) = self.name.clone().filter(|_| !self.full) else {
+            // Beside the palette: the buttons go under the picture, at its width.
+            return row.flex_col().gap_3().child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_1p5()
-                    .child(
-                        button("icon-upload", IconName::Download, "Upload")
-                            .on_click(cx.listener(|this, _, _, cx| this.upload(cx))),
-                    )
-                    .child(
-                        button("icon-random", IconName::LoaderCircle, "Randomize").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.icon = Icon::picked(&seed());
-                                cx.notify();
-                            }),
-                        ),
-                    ),
-            )
+                    .child(upload.w(px(ART)))
+                    .child(random.w(px(ART))),
+            );
+        };
+        let picker = cx.entity();
+        let customize = Popover::new("icon-customize")
+            .trigger(button("icon-customize", IconName::Palette, "Customize").w_full())
+            .trigger_style(StyleRefinement::default().flex_1())
+            .content(move |_, _, cx| {
+                // Rendered on every frame it is open, so picks show at once.
+                div()
+                    .w(px(392.))
+                    .child(picker.update(cx, |picker, cx| picker.palette(cx)))
+            });
+        row.flex_1().child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Name"),
+                        )
+                        .child(Input::new(&name)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(customize)
+                        .child(div().flex_1().child(upload.w_full()))
+                        .child(div().flex_1().child(random.w_full())),
+                ),
+        )
     }
 
     /// The items and colors Customize offers.
@@ -226,9 +265,9 @@ impl Picker {
             .flex()
             .flex_col()
             .gap_3()
-            .p_3()
-            .rounded(theme.radius_lg)
-            .bg(theme.muted)
+            .when(self.full, |this| {
+                this.p_3().rounded(theme.radius_lg).bg(theme.muted)
+            })
             .child(tabs)
             .child(div().flex().flex_wrap().gap_1().children(items))
             .child(div().flex().flex_wrap().gap_2().children(colors))
@@ -243,7 +282,10 @@ impl Render for Picker {
             .flex()
             .items_start()
             .gap_5()
-            .child(self.preview(cx))
+            .child(
+                self.preview(cx)
+                    .when(self.name.is_some() && !self.full, |this| this.flex_1()),
+            )
             .when(self.full, |this| {
                 this.child(div().flex_1().min_w_0().child(self.palette(cx)))
             })

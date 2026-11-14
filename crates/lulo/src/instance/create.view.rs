@@ -2,9 +2,9 @@
 //! game version.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::Button;
 use gpui_kit::component::dialog::DialogEntrance;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::hover_card::HoverCard;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Icon as Glyph, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -13,9 +13,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use super::branches::{self, Branch};
+use super::install::size;
+use super::mods::{self, Bundle};
 use super::picture::{self, Picker};
 use super::{Instance, store};
-use crate::ui::{FancyButton, Loader};
+use crate::ui::{self, FancyButton, Loader, Meta};
 
 /// The step the dialog is on.
 #[derive(Clone, Copy, PartialEq)]
@@ -25,15 +27,25 @@ enum Step {
     Collection,
 }
 
-/// Height shared by the inputs and buttons of the form.
-const CONTROL: Pixels = px(36.);
+/// A collection's name and the Workshop items to install from it.
+pub type Mods = Option<(SharedString, Vec<u64>)>;
 
-type Created = Rc<dyn Fn(Instance, &mut Window, &mut App)>;
+type Created = Rc<dyn Fn(Instance, Mods, &mut Window, &mut App)>;
 
-/// Opens the dialog. `created` runs after a new instance is written under `root`.
+/// What is known about the pasted collection link.
+enum Lookup {
+    /// Nothing usable typed yet.
+    Empty,
+    Loading(u64),
+    Found(Box<Bundle>),
+    Failed(String),
+}
+
+/// Opens the dialog. `created` runs after a new instance is written under `root`, with the
+/// mods to install into it when it started from a collection.
 pub fn open(
     root: PathBuf,
-    created: impl Fn(Instance, &mut Window, &mut App) + 'static,
+    created: impl Fn(Instance, Mods, &mut Window, &mut App) + 'static,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -63,17 +75,29 @@ struct Create {
     /// `None` while loading from Steam.
     branches: Option<Result<Vec<Branch>, String>>,
     branch: usize,
-    /// The picture so far; Customize lives in the instance's settings.
+    /// The picture so far, beside the name field.
     picture: Entity<Picker>,
     name: Entity<InputState>,
     /// The name used when the field is left empty; it shows as the placeholder.
     suggested: &'static str,
     link: Entity<InputState>,
+    collection: Lookup,
+    _link: Subscription,
 }
 
 impl Create {
     fn new(root: PathBuf, created: Created, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let suggested = super::suggest();
+        let link = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("https://steamcommunity.com/sharedfiles/filedetails/?id=")
+        });
+        let on_link = cx.subscribe_in(&link, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::Change = event {
+                this.typed(window, cx);
+            }
+        });
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder(suggested));
         Self {
             root,
             created,
@@ -81,14 +105,95 @@ impl Create {
             forward: true,
             branches: None,
             branch: 0,
-            picture: cx.new(|_| Picker::new(None, false)),
-            name: cx.new(|cx| InputState::new(window, cx).placeholder(suggested)),
+            picture: cx.new(|_| Picker::new(None, false).with_name(name.clone())),
+            name,
             suggested,
-            link: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("https://steamcommunity.com/sharedfiles/filedetails/?id=")
-            }),
+            link,
+            collection: Lookup::Empty,
+            _link: on_link,
         }
+    }
+
+    /// Looks the collection up as soon as the link holds an id, so pasting is all it takes.
+    fn typed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let typed = self.link.read(cx).value();
+        let Some(id) = steam::workshop::parse_id(&typed) else {
+            self.collection = if typed.trim().is_empty() {
+                Lookup::Empty
+            } else {
+                Lookup::Failed("Hmm, that doesn't look like a Workshop link".into())
+            };
+            return cx.notify();
+        };
+        let known = match &self.collection {
+            Lookup::Loading(now) => *now == id,
+            Lookup::Found(found) => found.id == id,
+            _ => false,
+        };
+        if known {
+            return;
+        }
+        self.collection = Lookup::Loading(id);
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let found = mods::collection(id).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                // Another link was pasted meanwhile: this answer is stale.
+                if !matches!(this.collection, Lookup::Loading(now) if now == id) {
+                    return;
+                }
+                this.collection = match found {
+                    Ok(found) => {
+                        this.adopt(&found, window, cx);
+                        Lookup::Found(Box::new(found))
+                    }
+                    Err(why) => Lookup::Failed(why),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The instance takes the collection's name (as the one used when the field is left
+    /// empty) and its picture; both can still be changed.
+    fn adopt(&mut self, found: &Bundle, window: &mut Window, cx: &mut Context<Self>) {
+        let title = found.title.clone();
+        self.name
+            .update(cx, |name, cx| name.set_placeholder(title, window, cx));
+        if let Some(file) = &found.picture {
+            self.picture.update(cx, |picker, cx| {
+                picker.icon = super::Icon::Image {
+                    file: file.to_string_lossy().into_owned(),
+                };
+                cx.notify();
+            });
+        }
+    }
+
+    /// Whether the chosen game version is Build 42 or newer.
+    fn modern(&self) -> bool {
+        match &self.branches {
+            Some(Ok(list)) => list
+                .get(self.branch)
+                .is_none_or(|b| mods::branch_is_modern(&b.name)),
+            _ => true,
+        }
+    }
+
+    /// The collection's name and the items that fit the chosen version, once it is found
+    /// and has some.
+    fn mods(&self) -> Mods {
+        let Lookup::Found(found) = &self.collection else {
+            return None;
+        };
+        let (fit, _) = found.split(self.modern());
+        (!fit.is_empty()).then(|| {
+            (
+                found.title.clone().into(),
+                fit.iter().map(|item| item.id).collect(),
+            )
+        })
     }
 
     fn go(&mut self, step: Step, cx: &mut Context<Self>) {
@@ -113,10 +218,14 @@ impl Create {
 
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.name.read(cx).value().trim().to_owned();
-        let name = if typed.is_empty() {
-            self.suggested.to_owned()
-        } else {
-            typed
+        let mods = self.mods();
+        if self.step == Step::Collection && mods.is_none() {
+            return;
+        }
+        let name = match (typed.is_empty(), &mods) {
+            (false, _) => typed,
+            (true, Some((collection, _))) => collection.to_string(),
+            (true, None) => self.suggested.to_owned(),
         };
         let Some(Ok(list)) = &self.branches else {
             return;
@@ -131,7 +240,7 @@ impl Create {
         match made {
             Ok(instance) => {
                 window.close_dialog(cx);
-                (self.created)(instance, window, cx);
+                (self.created)(instance, mods, window, cx);
             }
             Err(err) => window.push_notification(
                 crate::ui::toast::failed_because("Well, that instance didn't happen", err),
@@ -203,10 +312,7 @@ impl Create {
                             .child(format!("Couldn't reach Steam: {err}")),
                     )
                     .child(
-                        Button::new("retry")
-                            .outline()
-                            .cursor_pointer()
-                            .label("Retry")
+                        ui::secondary("retry", "Retry")
                             .on_click(cx.listener(|this, _, _, cx| this.load(cx))),
                     );
             }
@@ -272,25 +378,120 @@ impl Create {
             )
     }
 
-    /// Back on the left, the step's action on the right.
-    fn footer(&self, action: Option<AnyElement>, cx: &mut Context<Self>) -> Div {
+    /// What the pasted collection holds for the chosen version, under its link. Every state
+    /// takes the same height, so the form below never jumps.
+    fn summary(&self, cx: &App) -> AnyElement {
+        let theme = cx.theme();
+        let frame = div()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap_2()
+            .h(SUMMARY)
+            .px_4()
+            .rounded(theme.radius_lg)
+            .bg(theme.group_box)
+            .border_1()
+            .border_color(theme.border);
+        let note = |icon: IconName, text: SharedString, color: Hsla| {
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_w_0()
+                .text_sm()
+                .text_color(color)
+                .child(Glyph::new(icon).size_4().flex_none())
+                .child(div().min_w_0().truncate().child(text))
+        };
+        match &self.collection {
+            Lookup::Empty => frame
+                .items_center()
+                .child(note(
+                    IconName::Link,
+                    "Paste a collection link and what's in it shows up here".into(),
+                    theme.muted_foreground,
+                ))
+                .into_any_element(),
+            Lookup::Loading(_) => frame
+                .items_center()
+                .child(note(
+                    IconName::Search,
+                    "Asking Steam what's in it".into(),
+                    theme.muted_foreground,
+                ))
+                .child(div().w(px(160.)).child(Loader))
+                .into_any_element(),
+            Lookup::Failed(why) => frame
+                .items_center()
+                .child(note(
+                    IconName::TriangleAlert,
+                    why.clone().into(),
+                    theme.danger,
+                ))
+                .into_any_element(),
+            Lookup::Found(found) => {
+                let modern = self.modern();
+                let (fit, other) = found.split(modern);
+                let total: u64 = fit.iter().map(|item| item.size).sum();
+                let build = if modern { "Build 41" } else { "Build 42" };
+                let facts = div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .min_w_0()
+                    .map(|this| {
+                        if fit.is_empty() {
+                            this.child(note(
+                                IconName::TriangleAlert,
+                                "Nothing in it runs on this version".into(),
+                                theme.danger,
+                            ))
+                        } else {
+                            this.child(Meta::new(
+                                IconName::Puzzle,
+                                match fit.len() {
+                                    1 => "1 mod".to_owned(),
+                                    n => format!("{n} mods"),
+                                },
+                            ))
+                            .child(Meta::new(IconName::Download, size(total)))
+                        }
+                    })
+                    .when(!other.is_empty(), |this| {
+                        this.child(left_out(&other, build, cx))
+                    });
+                let card = frame
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .truncate()
+                            .child(found.title.clone()),
+                    )
+                    .child(facts);
+                ui::enter(card, "collection-found").into_any_element()
+            }
+        }
+    }
+
+    /// Back on the left and Create on the right, always there; Create waits, dimmed, until
+    /// there is something to create.
+    fn footer(&self, ready: bool, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
-            .justify_end()
-            .gap_2()
-            .pt_2()
+            .justify_between()
             .child(
-                Button::new("back")
-                    .outline()
-                    .cursor_pointer()
+                ui::secondary("back", "Back")
                     .icon(IconName::ChevronLeft)
-                    .label("Back")
-                    .h(CONTROL)
-                    .px_3()
-                    .rounded(px(8.))
                     .on_click(cx.listener(|this, _, _, cx| this.go(Step::Choose, cx))),
             )
-            .children(action)
+            .child(
+                FancyButton::new("create", "Create instance")
+                    .small()
+                    .icon(IconName::Plus)
+                    .disabled(!ready)
+                    .on_click(cx.listener(|this, _, window, cx| this.create(window, cx))),
+            )
     }
 }
 
@@ -354,6 +555,82 @@ fn option(
         )
 }
 
+/// Height of the collection summary in every state: its title and one line of facts.
+const SUMMARY: Pixels = px(80.);
+
+/// How many of the collection's mods stay out for being made for `build` alone, underlined;
+/// hovering lists them, each one opening its Workshop page.
+fn left_out(other: &[&steam::workshop::Item], build: &'static str, cx: &App) -> HoverCard {
+    let color = ui::warning_text(cx);
+    let items: Rc<Vec<(u64, String)>> = Rc::new(
+        other
+            .iter()
+            .map(|item| (item.id, item.title.clone()))
+            .collect(),
+    );
+    let count = items.len();
+    HoverCard::new("left-out")
+        .open_delay(std::time::Duration::from_millis(300))
+        .trigger(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_1p5()
+                .text_sm()
+                .text_color(color)
+                .cursor_pointer()
+                .child(Glyph::new(IconName::TriangleAlert).size_4())
+                .child(div().underline().child(format!("{count} left out"))),
+        )
+        .content(move |_, _, cx| {
+            let theme = cx.theme();
+            let rows = items.iter().enumerate().map(|(ix, (id, title))| {
+                let url = format!("https://steamcommunity.com/sharedfiles/filedetails/?id={id}");
+                div()
+                    .id(("left-out", ix))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1p5()
+                    .rounded(theme.radius)
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.muted))
+                    .child(div().flex_1().min_w_0().truncate().child(title.clone()))
+                    .child(
+                        Glyph::new(IconName::ExternalLink)
+                            .size_3p5()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+            });
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .w(px(300.))
+                .child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("For {build} only, so they stay out")),
+                )
+                .child(
+                    div()
+                        .id("left-out-list")
+                        .flex()
+                        .flex_col()
+                        .max_h(px(220.))
+                        .overflow_y_scroll()
+                        .children(rows),
+                )
+        })
+}
+
 fn label(text: &'static str) -> Div {
     div()
         .text_sm()
@@ -369,51 +646,33 @@ impl Render for Create {
         let body = match self.step {
             Step::Choose => self.choose(cx),
             Step::Custom | Step::Collection => {
-                let ready = matches!(self.branches, Some(Ok(_)));
-                div()
+                let ready = matches!(self.branches, Some(Ok(_)))
+                    && (self.step != Step::Collection || self.mods().is_some());
+                let versions = div()
                     .flex()
                     .flex_col()
-                    .gap_4()
-                    .child(self.picture.clone())
-                    .when(self.step == Step::Collection, |this| {
-                        this.child(
+                    .gap_2()
+                    .child(label("Game version"))
+                    .child(self.versions(cx));
+                // From a collection the link comes first: it fills in the picture and the
+                // name, and the version sits under its summary, whose warning depends on it.
+                let body = div().flex().flex_col().gap_6();
+                match self.step {
+                    Step::Collection => body
+                        .child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap_1p5()
+                                .gap_2()
                                 .child(label("Collection link"))
-                                .child(Input::new(&self.link)),
+                                .child(Input::new(&self.link))
+                                .child(self.summary(cx)),
                         )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_1p5()
-                            .child(label("Name"))
-                            .child(Input::new(&self.name)),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(label("Game version"))
-                            .child(self.versions(cx)),
-                    )
-                    // ponytail: collections create a plain instance until #20 installs their mods.
-                    .child({
-                        let create = ready.then(|| {
-                            FancyButton::new("create", "Create instance")
-                                .small()
-                                .icon(IconName::Plus)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.create(window, cx)),
-                                )
-                                .into_any_element()
-                        });
-                        self.footer(create, cx)
-                    })
+                        .child(versions)
+                        .child(self.picture.clone()),
+                    _ => body.child(self.picture.clone()).child(versions),
+                }
+                .child(self.footer(ready, cx))
             }
         };
         body.with_animation(

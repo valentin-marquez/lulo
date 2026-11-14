@@ -9,6 +9,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
@@ -49,19 +50,28 @@ fn modern(instance: &Instance, version: Option<Version>) -> bool {
         (Some(version), _) => version.build >= 42,
         // Not run yet: Build 42 ships one jar, Build 41 loose class files.
         (None, Some(game)) => game.join("projectzomboid/projectzomboid.jar").is_file(),
-        // Not even installed: the branch says. `public` and `pre-release` are Build 42, as
-        // are the numbered and unstable ones; only the legacy branch is 41.
-        (None, None) => !instance.branch.contains("41"),
+        (None, None) => branch_is_modern(&instance.branch),
     }
 }
 
-/// Whether a Workshop item with these tags is made for the instance's build. Items are
-/// tagged `Build 41`, `Build 42` or both; one with neither says nothing and passes.
+/// Whether Steam branch `branch` is Build 42 or newer. `public` and `pre-release` are, as
+/// are the numbered and unstable ones; only the legacy branch is 41.
+pub fn branch_is_modern(branch: &str) -> bool {
+    !branch.contains("41")
+}
+
+/// Whether a Workshop item with these tags is made for the instance's build.
 pub fn fits(instance: &Instance, tags: &[String]) -> bool {
+    for_build(tags, is_modern(instance))
+}
+
+/// Whether a Workshop item with these tags is made for a game of this build line. Items are
+/// tagged `Build 41`, `Build 42` or both; one with neither says nothing and passes.
+fn for_build(tags: &[String], modern: bool) -> bool {
     let has = |tag: &str| tags.iter().any(|t| t == tag);
     match (has("Build 41"), has("Build 42")) {
         (false, false) | (true, true) => true,
-        (_, for_42) => for_42 == is_modern(instance),
+        (_, for_42) => for_42 == modern,
     }
 }
 
@@ -288,6 +298,19 @@ pub fn list(instance: &Instance) -> Vec<Mod> {
     mods
 }
 
+/// When the instance's pins and active list last changed.
+pub type Stamp = (Option<std::time::SystemTime>, Option<std::time::SystemTime>);
+
+/// The [`Stamp`] of the instance now: two `stat` calls, cheap enough for the UI thread. Every
+/// install, removal and turn on or off rewrites one of the two files.
+pub fn stamp(instance: &Instance) -> Stamp {
+    let changed = |path: PathBuf| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    (
+        changed(instance.dir.join("mods.json")),
+        changed(mods_dir(instance).join("default.txt")),
+    )
+}
+
 /// Turns mod `id` on or off. Turning one on also turns on the installed mods it requires;
 /// the ids it requires that aren't installed come back so the caller can say so.
 pub fn set_enabled(instance: &Instance, id: &str, on: bool) -> io::Result<Vec<String>> {
@@ -445,14 +468,11 @@ fn picture_ext(bytes: &[u8]) -> Option<&'static str> {
 /// `item`'s Workshop picture, downloaded once into the cache next to the instances (like the
 /// avatars). `None` when it has none, it couldn't be fetched, or it is in a format that
 /// isn't shown.
-pub async fn picture(
-    http: &steam::reqwest::Client,
-    item: &steam::workshop::Item,
-) -> Option<PathBuf> {
+pub async fn picture(http: &steam::reqwest::Client, url: Option<&str>) -> Option<PathBuf> {
     let cache = super::store::root()
         .with_file_name("cache")
         .join("workshop");
-    let url = item.preview.as_deref()?;
+    let url = url?;
     // Named by the picture's own address, which changes when its author replaces it.
     let name: String = url
         .trim_end_matches('/')
@@ -486,7 +506,7 @@ pub async fn lookup(id: u64) -> Result<Listing, String> {
             .next()
             .filter(|item| item.app == APP && !item.title.is_empty());
         let Some(item) = item else { return Ok(None) };
-        let picture = picture(&http, &item).await;
+        let picture = picture(&http, item.preview.as_deref()).await;
         Ok::<_, steam::Error>(Some(Listing { item, picture }))
     })
     .await
@@ -509,46 +529,93 @@ pub fn set_enabled_all(instance: &Instance, ids: &[String], on: bool) -> io::Res
 /// What an install brought in.
 #[derive(Debug, PartialEq)]
 pub struct Installed {
-    /// Title of the item that was asked for.
+    /// Title of the first item that was asked for.
     pub title: String,
-    /// Titles of the Workshop items it requires that were installed with it.
+    /// Titles of the other Workshop items installed with it: the rest of what was asked for,
+    /// then what those require.
     pub with: Vec<String>,
 }
 
-/// The most items one install follows through `requires`; a mod needs a handful at most.
+/// The most items one install follows through `requires` beyond the ones asked for; a mod
+/// needs a handful at most.
 const MAX_REQUIRED: usize = 50;
+/// Items asked of the Workshop in one request.
+const BATCH: usize = 50;
 
-/// Downloads Workshop item `id` into the instance with the items its author marked as
+/// Workshop items downloading at once. Each one already fetches 32 chunks at a time, so this
+/// is about overlapping the per-item round trips with the downloads, not about bandwidth.
+const PARALLEL_ITEMS: usize = 4;
+
+/// What a download task ended with.
+fn joined(done: Result<Result<(), String>, tokio::task::JoinError>) -> Result<(), String> {
+    done.map_err(|err| err.to_string())?
+}
+
+/// Moves a downloaded item from `staging` into the instance, pins it and turns its mods on.
+fn land(instance: &Instance, item: &steam::workshop::Item, staging: &Path) -> io::Result<()> {
+    let folders = adopt(instance, staging)?;
+    let _ = std::fs::remove_dir_all(staging);
+    let mut pins = read_pins(instance);
+    pins.items.retain(|pin| pin.id != item.id);
+    pins.items.push(Pin {
+        id: item.id,
+        manifest: item.manifest,
+        title: item.title.clone(),
+        folders: folders.clone(),
+    });
+    write_pins(instance, &pins)?;
+    // On as soon as it lands, so a cancelled install leaves what it got usable. A mod whose
+    // requirement comes later is fine: turning that one on puts it first.
+    // ponytail: each turn-on rescans the mods folder, quadratic over a collection (325 mods:
+    // about 100k small reads); keep the list in memory if it shows.
+    for found in list(instance)
+        .iter()
+        .filter(|m| folders.contains(&m.folder))
+    {
+        set_enabled(instance, &found.id, true)?;
+    }
+    Ok(())
+}
+
+/// Downloads Workshop items `ids` into the instance with the items their authors marked as
 /// required (and theirs), and turns all their mods on. Items the instance already has are
 /// left alone. `progress` gets the title being downloaded with the bytes done and in total,
 /// over everything. Meant to run on the background runtime as one task, so aborting it stops
-/// the download.
+/// the download; each item is moved into the instance as soon as it is down, so what finished
+/// before a cancel stays.
 // ponytail: each instance keeps its own copy of a mod; share them like game builds if disk
 // use becomes a problem.
 pub async fn install(
     instance: Instance,
-    id: u64,
-    mut progress: impl FnMut(&str, u64, u64) + Send,
+    ids: Vec<u64>,
+    progress: impl FnMut(&str, u64, u64) + Send + 'static,
 ) -> Result<Installed, String> {
     let fail = |err: steam::Error| err.to_string();
     let incoming = instance.dir.join(".incoming");
     let http = steam::http();
     let mut client = steam::Client::anonymous(&http).await.map_err(fail)?;
 
-    // The item first, then what it requires, each once; what is already here is skipped.
+    // The items asked for first (downloaded again if here, which updates them), then what
+    // they require, each once; required items already here are skipped.
     let have: Vec<u64> = read_pins(&instance)
         .items
         .iter()
         .map(|pin| pin.id)
         .collect();
-    let mut seen = vec![id];
-    let mut queue = vec![id];
+    let mut seen: Vec<u64> = Vec::new();
+    for id in &ids {
+        if !seen.contains(id) {
+            seen.push(*id);
+        }
+    }
+    let mut queue = seen.clone();
     let mut items = Vec::new();
-    while !queue.is_empty() && seen.len() <= MAX_REQUIRED {
-        let found = steam::workshop::details(&mut client, &queue)
+    while !queue.is_empty() && seen.len() <= ids.len() + MAX_REQUIRED {
+        let take = queue.len().min(BATCH);
+        let batch: Vec<u64> = queue.drain(..take).collect();
+        let found = steam::workshop::details(&mut client, &batch)
             .await
             .map_err(fail)?;
-        queue.clear();
         for item in found {
             if item.app != APP || item.manifest == 0 {
                 continue;
@@ -562,59 +629,126 @@ pub async fn install(
             items.push(item);
         }
     }
-    if items.first().is_none_or(|item| item.id != id) {
-        return Err(
+    if !items.iter().any(|item| ids.contains(&item.id)) {
+        return Err(if ids.len() == 1 {
             "That isn't a Project Zomboid mod. Collections are added when creating an instance"
-                .into(),
-        );
+                .into()
+        } else {
+            "None of those are Project Zomboid mods Steam still has".into()
+        });
     }
 
     let _ = std::fs::remove_dir_all(&incoming);
     let total: u64 = items.iter().map(|item| item.size).sum();
-    let mut before = 0;
-    for item in &items {
-        progress(&item.title, before, total);
-        let staging = incoming.join(item.id.to_string());
-        steam::workshop::download(&mut client, &http, item, &staging, |done| {
-            progress(&item.title, before + done, total)
-        })
+    let source = steam::workshop::source(&mut client, APP)
         .await
         .map_err(fail)?;
-        before += item.size;
+    // Bytes done per item, summed for the overall progress by every download in flight.
+    let report = Arc::new(Mutex::new((vec![0u64; items.len()], progress)));
+    // Moving an item in and turning it on edits `mods.json` and `default.txt`: one at a time.
+    let landing = Arc::new(Mutex::new(()));
+    let mut running = tokio::task::JoinSet::new();
+    for (ix, item) in items.iter().enumerate() {
+        // The manifest needs the Steam client, so manifests come one by one while the items
+        // before download. Per item that is most of the time: a 370 KB mod took 400 ms of
+        // manifest and 40 ms of files.
+        let manifest = steam::workshop::manifest(&mut client, &http, &source, item)
+            .await
+            .map_err(fail)?;
+        if running.len() >= PARALLEL_ITEMS
+            && let Some(done) = running.join_next().await
+        {
+            joined(done)?;
+        }
+        let (http, source, report, landing) = (
+            http.clone(),
+            source.clone(),
+            report.clone(),
+            landing.clone(),
+        );
+        let (instance, item, staging) = (
+            instance.clone(),
+            item.clone(),
+            incoming.join(item.id.to_string()),
+        );
+        running.spawn(async move {
+            let tell = |done: u64| {
+                let mut report = report.lock().unwrap_or_else(PoisonError::into_inner);
+                report.0[ix] = done;
+                let sum = report.0.iter().sum();
+                (report.1)(&item.title, sum, total);
+            };
+            steam::workshop::fetch(&http, &source, &manifest, &staging, &tell)
+                .await
+                .map_err(fail)?;
+            tell(item.size);
+            crate::runtime::blocking(move || {
+                let _one = landing.lock().unwrap_or_else(PoisonError::into_inner);
+                land(&instance, &item, &staging)
+            })
+            .await?
+            .map_err(|err| err.to_string())
+        });
+    }
+    while let Some(done) = running.join_next().await {
+        joined(done)?;
     }
     drop(client);
+    let _ = std::fs::remove_dir_all(&incoming);
+    let mut titles = items.into_iter().map(|item| item.title);
+    Ok(Installed {
+        title: titles.next().unwrap_or_default(),
+        with: titles.collect(),
+    })
+}
 
-    let placed = crate::runtime::blocking(move || {
-        let mut pins = read_pins(&instance);
-        let mut placed = Vec::new();
-        for item in &items {
-            let folders = adopt(&instance, &incoming.join(item.id.to_string()))?;
-            pins.items.retain(|pin| pin.id != item.id);
-            pins.items.push(Pin {
-                id: item.id,
-                manifest: item.manifest,
-                title: item.title.clone(),
-                folders: folders.clone(),
-            });
-            placed.extend(folders);
-        }
-        let _ = std::fs::remove_dir_all(&incoming);
-        write_pins(&instance, &pins)?;
-        // Once everything is on disk, so a mod finds the ones it needs when it is turned on.
-        for found in list(&instance)
+/// A Workshop collection as the create dialog shows it before installing.
+#[derive(Debug, Clone)]
+pub struct Bundle {
+    pub id: u64,
+    pub title: String,
+    /// Its Workshop picture (or its first mod's, when it has none), downloaded, as
+    /// [`Listing::picture`].
+    pub picture: Option<PathBuf>,
+    /// Its mods with the ones they require, each once.
+    pub mods: Vec<steam::workshop::Item>,
+}
+
+impl Bundle {
+    /// The mods made for a game of this build line, and the ones tagged for the other.
+    pub fn split(
+        &self,
+        modern: bool,
+    ) -> (Vec<&steam::workshop::Item>, Vec<&steam::workshop::Item>) {
+        self.mods
             .iter()
-            .filter(|m| placed.contains(&m.folder))
-        {
-            set_enabled(&instance, &found.id, true)?;
-        }
-        let mut titles = items.into_iter().map(|item| item.title);
-        Ok::<_, io::Error>(Installed {
-            title: titles.next().unwrap_or_default(),
-            with: titles.collect(),
+            .filter(|item| item.app == APP && item.manifest != 0)
+            .partition(|item| for_build(&item.tags, modern))
+    }
+}
+
+/// What the Workshop says is in collection `id`.
+pub async fn collection(id: u64) -> Result<Bundle, String> {
+    crate::runtime::spawn(async move {
+        let http = steam::http();
+        let mut client = steam::Client::anonymous(&http).await?;
+        let found = steam::workshop::collection(&mut client, id).await?;
+        // Many collections have no picture of their own; the first mod with one stands in.
+        let url = found
+            .preview
+            .as_deref()
+            .or_else(|| found.mods.iter().find_map(|item| item.preview.as_deref()));
+        let picture = picture(&http, url).await;
+        Ok::<_, steam::Error>(Bundle {
+            id: found.id,
+            title: found.title,
+            picture,
+            mods: found.mods,
         })
     })
-    .await?;
-    placed.map_err(|err| err.to_string())
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -678,6 +812,43 @@ mod tests {
         new.branch = "public".into();
         assert!(!is_modern(&new));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_collection_keeps_the_mods_for_the_chosen_build() {
+        let item = |id, tags: &[&str], manifest| steam::workshop::Item {
+            id,
+            app: APP,
+            title: id.to_string(),
+            manifest,
+            file_url: None,
+            size: 1,
+            updated: None,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            preview: None,
+            requires: Vec::new(),
+            subscriptions: 0,
+        };
+        let bundle = Bundle {
+            id: 1,
+            title: "Pack".into(),
+            picture: None,
+            mods: vec![
+                item(10, &["Build 42"], 5),
+                item(11, &["Build 41"], 5),
+                item(12, &["Maps"], 5),
+                item(13, &["Build 41", "Build 42"], 5),
+                // No manifest: nothing to download.
+                item(14, &["Build 42"], 0),
+            ],
+        };
+        let ids = |modern| {
+            let (fit, other) = bundle.split(modern);
+            let ids = |items: Vec<&steam::workshop::Item>| items.iter().map(|i| i.id).collect();
+            (ids(fit), ids(other))
+        };
+        assert_eq!(ids(true), (vec![10, 12, 13], vec![11]));
+        assert_eq!(ids(false), (vec![11, 12, 13], vec![10]));
     }
 
     #[test]
@@ -885,9 +1056,13 @@ mod tests {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(install(instance.clone(), id, move |_, done, total| {
-                    *report.lock().unwrap() = (done, total);
-                }));
+                .block_on(install(
+                    instance.clone(),
+                    vec![id],
+                    move |_, done, total| {
+                        *report.lock().unwrap() = (done, total);
+                    },
+                ));
             (result, *seen.lock().unwrap())
         };
         let (title, (done, total)) = run(3832274571);

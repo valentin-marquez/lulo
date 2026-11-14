@@ -29,6 +29,12 @@ pub struct Item {
     pub file_url: Option<String>,
     pub size: u64,
     pub updated: Option<u32>,
+    /// Workshop tags, as their author set them (`Build 42`, `Multiplayer`...).
+    pub tags: Vec<String>,
+    /// URL of its picture on the Workshop, when it is on one of Steam's image hosts.
+    pub preview: Option<String>,
+    /// The Workshop items its author marked as required (for a collection, its items).
+    pub requires: Vec<u64>,
 }
 
 impl From<PublishedFileDetails> for Item {
@@ -40,6 +46,9 @@ impl From<PublishedFileDetails> for Item {
             manifest: d.hcontent_file(),
             size: d.file_size(),
             updated: d.time_updated,
+            tags: d.tags.iter().map(|t| t.tag().to_owned()).collect(),
+            preview: d.preview_url.clone().filter(|url| is_steam_image(url)),
+            requires: d.children.iter().map(|c| c.publishedfileid()).collect(),
             // Last: it moves out of `d`.
             file_url: d.file_url.filter(|u| !u.is_empty()),
         }
@@ -53,6 +62,7 @@ async fn fetch(
 ) -> Result<Vec<PublishedFileDetails>> {
     let request = CPublishedFileGetDetailsRequest {
         publishedfileids: ids.to_vec(),
+        includetags: Some(true),
         includechildren: children.then_some(true),
     };
     let reply: CPublishedFileGetDetailsResponse =
@@ -60,8 +70,9 @@ async fn fetch(
     Ok(reply.publishedfiledetails)
 }
 
+/// What the Workshop says about each of `ids`, with the items each one requires.
 pub async fn details(client: &mut Client, ids: &[u64]) -> Result<Vec<Item>> {
-    Ok(fetch(client, ids, false)
+    Ok(fetch(client, ids, true)
         .await?
         .into_iter()
         .map(Item::from)
@@ -121,6 +132,36 @@ fn new_children(item: &PublishedFileDetails, seen: &mut HashSet<u64>) -> Vec<u64
         .collect()
 }
 
+/// A Workshop picture is at most this big; they are a few hundred KB.
+const PREVIEW_CAP: usize = 8 << 20;
+
+/// An `https` URL on one of the hosts Steam serves Workshop pictures from. The URL comes from
+/// what an item's author uploaded, so it is checked before lulo fetches it.
+fn is_steam_image(url: &str) -> bool {
+    let Some(host) = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+    else {
+        return false;
+    };
+    [".steamusercontent.com", ".steamstatic.com", ".akamaihd.net"]
+        .iter()
+        .any(|suffix| host.ends_with(suffix))
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+}
+
+/// The picture at `url`, one of [`Item::preview`].
+pub async fn preview(http: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    let reply = http
+        .get(url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    crate::read_capped(reply, PREVIEW_CAP, "preview").await
+}
+
 /// The item id in what a user pastes: a Workshop or Steam link, or the number itself.
 pub fn parse_id(text: &str) -> Option<u64> {
     let text = text.trim();
@@ -146,13 +187,14 @@ pub fn parse_id(text: &str) -> Option<u64> {
         .find_map(|pair| pair.strip_prefix("id=")?.parse().ok())
 }
 
-/// Downloads `item`'s current version into `dir`.
+/// Downloads `item`'s current version into `dir`. `progress` receives the bytes done so far.
 // ponytail: legacy `file_url` items aren't handled; none of the PZ mods tested use them.
 pub async fn download(
     client: &mut Client,
     http: &reqwest::Client,
     item: &Item,
     dir: &Path,
+    progress: impl FnMut(u64),
 ) -> Result<()> {
     let key = content::depot_key(client, item.app, item.app).await?;
     let hosts = content::cdn_hosts(client).await?;
@@ -165,9 +207,17 @@ pub async fn download(
         &key,
     )
     .await?;
-    content::install(http, &hosts, (item.app, &key), &manifest, dir, None, |_| {})
-        .await
-        .map(drop)
+    content::install(
+        http,
+        &hosts,
+        (item.app, &key),
+        &manifest,
+        dir,
+        None,
+        progress,
+    )
+    .await
+    .map(drop)
 }
 
 #[cfg(test)]
@@ -198,6 +248,27 @@ mod tests {
             "https://steamcommunity.com/sharedfiles/filedetails/",
         ] {
             assert_eq!(parse_id(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn only_steam_hosts_serve_previews() {
+        for ok in [
+            "https://images.steamusercontent.com/ugc/123/ABC/",
+            "https://shared.fastly.steamstatic.com/a.jpg",
+            "https://steamuserimages-a.akamaihd.net/ugc/1/2/",
+        ] {
+            assert!(is_steam_image(ok), "{ok}");
+        }
+        for bad in [
+            "http://images.steamusercontent.com/ugc/1/",
+            "https://evil.example/images.steamusercontent.com/a",
+            "https://steamusercontent.com.evil.example/a",
+            "https://user:pw@images.steamusercontent.com/a",
+            "file:///etc/passwd",
+            "",
+        ] {
+            assert!(!is_steam_image(bad), "{bad}");
         }
     }
 

@@ -50,7 +50,7 @@ async fn downloads_a_workshop_mod_like_steamcmd() {
     assert_eq!(item.app, PROJECT_ZOMBOID);
 
     let dir = std::env::temp_dir().join(format!("lulo-live-{}", std::process::id()));
-    steam::workshop::download(&mut client, &http, &item, &dir)
+    steam::workshop::download(&mut client, &http, &item, &dir, |_| {})
         .await
         .expect("download");
 

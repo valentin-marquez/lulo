@@ -246,6 +246,9 @@ pub struct ContentManifestMetadata {
 pub struct CPublishedFileGetDetailsRequest {
     #[prost(fixed64, repeated, packed = "false", tag = "1")]
     pub publishedfileids: Vec<u64>,
+    /// Asks for the item's Workshop tags.
+    #[prost(bool, optional, tag = "2")]
+    pub includetags: Option<bool>,
     /// Asks for the items a collection holds, or the ones a mod requires.
     #[prost(bool, optional, tag = "4")]
     pub includechildren: Option<bool>,
@@ -270,6 +273,9 @@ pub struct PublishedFileDetails {
     pub file_size: Option<u64>,
     #[prost(string, optional, tag = "10")]
     pub file_url: Option<String>,
+    /// The item's picture on the Workshop.
+    #[prost(string, optional, tag = "11")]
+    pub preview_url: Option<String>,
     #[prost(fixed64, optional, tag = "14")]
     pub hcontent_file: Option<u64>,
     #[prost(string, optional, tag = "16")]
@@ -279,8 +285,17 @@ pub struct PublishedFileDetails {
     /// EWorkshopFileType: a collection is not a mod.
     #[prost(uint32, optional, tag = "34")]
     pub file_type: Option<u32>,
+    /// Workshop tags; Project Zomboid mods carry `Build 41` and `Build 42` among them.
+    #[prost(message, repeated, tag = "52")]
+    pub tags: Vec<PublishedFileTag>,
     #[prost(message, repeated, tag = "53")]
     pub children: Vec<PublishedFileChild>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct PublishedFileTag {
+    #[prost(string, optional, tag = "1")]
+    pub tag: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Message)]

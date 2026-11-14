@@ -507,6 +507,69 @@ fn card(
         .into_any_element()
 }
 
+/// The page's title. With a screenshot of the game it is a banner: the picture, darkened
+/// toward the left so the title reads over it; without it (offline, first run) just the title.
+fn banner(total: usize, hero: Option<std::path::PathBuf>, cx: &App) -> Div {
+    let theme = cx.theme();
+    let Some(hero) = hero else {
+        return div()
+            .text_xl()
+            .font_weight(FontWeight::BOLD)
+            .child("Library");
+    };
+    // Just how many: some may not be installed yet, so it claims nothing more.
+    let count = match total {
+        1 => "1 instance".to_owned(),
+        many => format!("{many} instances"),
+    };
+    div()
+        .relative()
+        .flex_none()
+        .h(px(176.))
+        .rounded(theme.radius_lg)
+        .overflow_hidden()
+        .child(
+            img(hero)
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .rounded(theme.radius_lg)
+                .object_fit(ObjectFit::Cover),
+        )
+        // Darkens the lower part, where the title sits, whatever the picture has there.
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .rounded(theme.radius_lg)
+                .bg(linear_gradient(
+                    180.,
+                    linear_color_stop(black().opacity(0.), 0.2),
+                    linear_color_stop(black().opacity(0.7), 1.),
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_6()
+                .bottom_5()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .text_color(white())
+                .child(
+                    div()
+                        .text_2xl()
+                        .font_weight(FontWeight::BOLD)
+                        .child("Library"),
+                )
+                .child(div().text_sm().child(count)),
+        )
+}
+
 impl Render for Library {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = self.shown(cx);
@@ -515,6 +578,10 @@ impl Render for Library {
             .upgrade()
             .map_or(0, |shell| shell.read(cx).instances().len());
         let handle = self.shell.clone();
+        let hero = self
+            .shell
+            .upgrade()
+            .and_then(|shell| shell.read(cx).banner());
 
         let body = if total == 0 {
             Empty::new(
@@ -571,12 +638,7 @@ impl Render for Library {
             .gap_4()
             .p_6()
             .overflow_y_scroll()
-            .child(
-                div()
-                    .text_xl()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Library"),
-            )
+            .child(banner(total, hero, cx))
             .child(self.toolbar(window, cx))
             .child(body)
             // Right click on the page itself; a card's own menu wins over this one.

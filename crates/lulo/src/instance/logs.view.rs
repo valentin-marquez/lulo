@@ -22,10 +22,8 @@ use crate::ui::Empty;
 
 /// Height of the bar's controls: the primary button's small size, like every toolbar.
 const CONTROL: Pixels = px(36.);
-/// Width of the session picker, whatever it names: "Live" and a saved session's date are
-/// different lengths, and the rest of the bar must not shift when one replaces the other.
-/// Just enough for the longest name ("Nov 13 20:38") with its icon.
-const SESSION: Pixels = px(132.);
+/// The widest the session picker gets; a longer name is cut short instead of pushing the bar.
+const SESSION: Pixels = px(168.);
 /// Height of one line.
 const ROW: f32 = 22.;
 /// Dragging this close to the list's top or bottom edge, or past it, scrolls it.
@@ -220,7 +218,13 @@ impl Logs {
         let line = &self.lines[self.shown[ix]];
         let color = match line.level {
             Level::Error => theme.danger,
-            Level::Warn => theme.warning,
+            // The palette's amber is a fill color: as text on a light surface it barely
+            // reads, so there it keeps its hue and gets darker (about 5:1 on white).
+            Level::Warn if theme.mode.is_dark() => theme.warning,
+            Level::Warn => Hsla {
+                l: theme.warning.l * 0.6,
+                ..theme.warning
+            },
             Level::Info => theme.foreground,
             Level::Debug => theme.muted_foreground,
         };
@@ -309,7 +313,8 @@ impl Logs {
             .ghost()
             // Two px shorter than the tray, so its hover fill sits inside the border.
             .h(CONTROL - px(4.))
-            .w_full()
+            .max_w(SESSION - px(2.))
+            .overflow_hidden()
             .px_3()
             .rounded(cx.theme().radius - px(2.))
             .cursor_pointer()
@@ -342,7 +347,7 @@ impl Logs {
             .flex_none()
             .items_center()
             .h(CONTROL)
-            .w(SESSION)
+            .max_w(SESSION)
             .px(px(1.))
             .rounded(cx.theme().radius)
             .bg(cx.theme().background)

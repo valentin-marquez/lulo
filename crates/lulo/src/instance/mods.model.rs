@@ -45,12 +45,23 @@ pub fn game_version(cachedir: &Path) -> Option<Version> {
 
 /// Whether the instance's game uses Build 42's mod layout and `default.txt` format.
 fn modern(instance: &Instance, version: Option<Version>) -> bool {
-    match version {
-        Some(version) => version.build >= 42,
+    match (version, instance.game()) {
+        (Some(version), _) => version.build >= 42,
         // Not run yet: Build 42 ships one jar, Build 41 loose class files.
-        None => instance
-            .game()
-            .is_none_or(|game| game.join("projectzomboid/projectzomboid.jar").is_file()),
+        (None, Some(game)) => game.join("projectzomboid/projectzomboid.jar").is_file(),
+        // Not even installed: the branch says. `public` and `pre-release` are Build 42, as
+        // are the numbered and unstable ones; only the legacy branch is 41.
+        (None, None) => !instance.branch.contains("41"),
+    }
+}
+
+/// Whether a Workshop item with these tags is made for the instance's build. Items are
+/// tagged `Build 41`, `Build 42` or both; one with neither says nothing and passes.
+pub fn fits(instance: &Instance, tags: &[String]) -> bool {
+    let has = |tag: &str| tags.iter().any(|t| t == tag);
+    match (has("Build 41"), has("Build 42")) {
+        (false, false) | (true, true) => true,
+        (_, for_42) => for_42 == is_modern(instance),
     }
 }
 
@@ -431,12 +442,41 @@ fn picture_ext(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// What the Workshop says about item `id`, with its picture.
-pub async fn lookup(id: u64) -> Result<Listing, String> {
-    // Next to the instances, like the avatars: pictures are only a cache.
+/// `item`'s Workshop picture, downloaded once into the cache next to the instances (like the
+/// avatars). `None` when it has none, it couldn't be fetched, or it is in a format that
+/// isn't shown.
+pub async fn picture(
+    http: &steam::reqwest::Client,
+    item: &steam::workshop::Item,
+) -> Option<PathBuf> {
     let cache = super::store::root()
         .with_file_name("cache")
         .join("workshop");
+    let url = item.preview.as_deref()?;
+    // Named by the picture's own address, which changes when its author replaces it.
+    let name: String = url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()?
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(40)
+        .collect();
+    for ext in ["jpg", "png", "gif", "webp"] {
+        let path = cache.join(format!("{name}.{ext}"));
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let bytes = steam::workshop::preview(http, url).await.ok()?;
+    let path = cache.join(format!("{name}.{}", picture_ext(&bytes)?));
+    std::fs::create_dir_all(&cache).ok()?;
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+/// What the Workshop says about item `id`, with its picture.
+pub async fn lookup(id: u64) -> Result<Listing, String> {
     let found = crate::runtime::spawn(async move {
         let http = steam::http();
         let mut client = steam::Client::anonymous(&http).await?;
@@ -446,16 +486,7 @@ pub async fn lookup(id: u64) -> Result<Listing, String> {
             .next()
             .filter(|item| item.app == APP && !item.title.is_empty());
         let Some(item) = item else { return Ok(None) };
-        let mut picture = None;
-        if let Some(url) = &item.preview
-            && let Ok(bytes) = steam::workshop::preview(&http, url).await
-            && let Some(ext) = picture_ext(&bytes)
-        {
-            let path = cache.join(format!("{id}.{ext}"));
-            if std::fs::create_dir_all(&cache).is_ok() && std::fs::write(&path, bytes).is_ok() {
-                picture = Some(path);
-            }
-        }
+        let picture = picture(&http, &item).await;
         Ok::<_, steam::Error>(Some(Listing { item, picture }))
     })
     .await
@@ -623,6 +654,30 @@ mod tests {
         let path = dir.join(file);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn fits_an_item_to_the_instance_by_its_build_tags() {
+        let dir = temp("fits");
+        let tags = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        // Never installed: the branch decides, and only the legacy one is Build 41.
+        let mut new = instance(&dir);
+        for (branch, modern) in [("public", true), ("pre-release", true), ("legacy41", false)] {
+            new.branch = branch.into();
+            assert_eq!(is_modern(&new), modern, "{branch}");
+            assert_eq!(fits(&new, &tags(&["Build 42", "QOL"])), modern, "{branch}");
+            assert_eq!(fits(&new, &tags(&["Build 41"])), !modern, "{branch}");
+            assert!(fits(&new, &tags(&["Build 41", "Build 42"])), "{branch}");
+            assert!(
+                fits(&new, &tags(&["Maps"])),
+                "no build tag passes: {branch}"
+            );
+        }
+        // Once the game has run, what it ran wins over the branch's name.
+        put(&dir, "zomboid/version.txt", "41.78.16 abc\n");
+        new.branch = "public".into();
+        assert!(!is_modern(&new));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

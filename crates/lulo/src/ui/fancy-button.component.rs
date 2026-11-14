@@ -49,6 +49,7 @@ pub struct FancyButton {
     icon: Option<Icon>,
     size: Size,
     danger: bool,
+    width: Option<Pixels>,
     on_click: Option<ClickHandler>,
 }
 
@@ -62,6 +63,7 @@ impl FancyButton {
             icon: None,
             size: Size::default(),
             danger: false,
+            width: None,
             on_click: None,
         }
     }
@@ -74,6 +76,12 @@ impl FancyButton {
     /// Filled with the danger color instead of the accent, for actions that destroy something.
     pub fn danger(mut self) -> Self {
         self.danger = true;
+        self
+    }
+
+    /// A fixed width, for a button whose label changes and must not push what is beside it.
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = Some(width);
         self
     }
 
@@ -134,6 +142,7 @@ impl RenderOnce for FancyButton {
             .justify_center()
             .gap_2()
             .h(self.size.height())
+            .when_some(self.width, |this, width| this.w(width))
             .px(self.size.padding())
             .text_color(foreground)
             .text_sm()

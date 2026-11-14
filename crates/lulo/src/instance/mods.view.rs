@@ -165,8 +165,9 @@ impl Mods {
         let (sort, filter) = (self.sort, self.filter);
         let (instance, shell) = (self.instance.clone(), self.shell.clone());
         let pick = |id: &'static str, icon: IconName, label: &'static str| {
+            // The Library's sort and group buttons, so both toolbars read the same.
             Button::new(id)
-                .ghost()
+                .outline()
                 .h(CONTROL)
                 .cursor_pointer()
                 .icon(icon)
@@ -580,14 +581,52 @@ impl Render for Mods {
             .read_with(cx, |shell, _| shell.adding_mods(&self.instance.id))
             .unwrap_or(false);
         let shown: Vec<Mod> = self.shown(cx).into_iter().cloned().collect();
-        let list = if self.mods.is_empty() {
-            Empty::new(
-                IconName::Puzzle,
-                "No mods yet",
-                "Add one from the Workshop and it lands here.",
-            )
-            .into_any_element()
-        } else if shown.is_empty() {
+        // No mods yet: the page says so and offers the one thing to do. A search, a sort and a
+        // filter with nothing to work on would only be noise.
+        if self.mods.is_empty() {
+            let (instance, shell) = (self.instance.clone(), self.shell.clone());
+            let theme = cx.theme();
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .gap_2()
+                .pt(px(120.))
+                .when(adding, |this| {
+                    this.child(div().w(px(200.)).pb_4().child(Loader))
+                })
+                .child(
+                    Icon::new(IconName::Puzzle)
+                        .size_8()
+                        .text_color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("No mods yet"),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("Add one from the Workshop and it lands here."),
+                )
+                .child(
+                    div().pt_3().child(
+                        FancyButton::new("mod-add-first", "Add mod")
+                            .small()
+                            .icon(IconName::Plus)
+                            .on_click(move |_, window, cx| {
+                                super::mod_add::open(instance.clone(), shell.clone(), window, cx)
+                            }),
+                    ),
+                )
+                .into_any_element();
+        }
+        let list = if shown.is_empty() {
             Empty::new(
                 IconName::Search,
                 "No mods match",
@@ -655,5 +694,6 @@ impl Render for Mods {
             })
             .child(list)
             .children(bar)
+            .into_any_element()
     }
 }

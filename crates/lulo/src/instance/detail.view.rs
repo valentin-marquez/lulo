@@ -140,7 +140,12 @@ impl Detail {
                             .child(Meta::new(IconName::Clock, played))
                             .children(note.map(|text| Meta::new(IconName::Download, text))),
                     )
-                    .children(super::bar(&instance.id, status, cx)),
+                    // As wide as the line of facts above it, not the whole header: a bar running
+                    // to the buttons reads as belonging to them.
+                    .children(
+                        super::bar(&instance.id, status, cx)
+                            .map(|bar| div().w(px(340.)).max_w_full().child(bar)),
+                    ),
             )
             .child({
                 let (shell, id) = (self.shell.clone(), instance.id.clone());
@@ -172,7 +177,10 @@ impl Detail {
             .child({
                 let (label, icon, enabled) = status.action();
                 let (shell, id) = (self.shell.clone(), instance.id.clone());
+                // One width for Play, Install, Cancel and Stop, so the header doesn't shift
+                // as the instance changes state.
                 FancyButton::new("play", label)
+                    .width(px(124.))
                     .icon(icon)
                     .when(enabled, |button| {
                         button.on_click(move |_, window, cx| {

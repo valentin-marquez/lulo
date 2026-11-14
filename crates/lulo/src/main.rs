@@ -1,5 +1,6 @@
 mod account;
 mod assets;
+mod discover;
 mod game;
 mod instance;
 mod library;

@@ -43,6 +43,8 @@ pub struct Shell {
     installs: HashMap<SharedString, install::Download>,
     /// Games running, by instance id.
     running: HashMap<SharedString, std::process::Child>,
+    /// News and trending mods for the panel on the right; `None` until Steam answers.
+    feed: Option<crate::discover::Feed>,
     /// Shows the loader under the title bar while the page's data loads.
     // ponytail: listing instances is instant; installs (roadmap 5) will set it.
     loading: bool,
@@ -60,7 +62,16 @@ impl Shell {
             });
         })
         .detach();
+        cx.spawn(async move |this, cx| {
+            let feed = crate::discover::load().await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.feed = Some(feed);
+                shell.changed(cx);
+            });
+        })
+        .detach();
         let mut shell = Self {
+            feed: None,
             account: None,
             latest: HashMap::new(),
             installs: HashMap::new(),
@@ -101,6 +112,11 @@ impl Shell {
             });
         })
         .detach();
+    }
+
+    /// The game screenshot for the Library's banner, once it has been fetched.
+    pub fn banner(&self) -> Option<std::path::PathBuf> {
+        self.feed.as_ref()?.banner.clone()
     }
 
     pub fn instances(&self) -> &[Instance] {
@@ -655,6 +671,8 @@ impl Render for Shell {
             }
         };
 
+        // The panel on the right needs a window wide enough for it and the page.
+        let discover = window.bounds().size.width >= crate::discover::MIN_WINDOW;
         div()
             .flex()
             .flex_col()
@@ -680,12 +698,18 @@ impl Render for Shell {
                             .rounded_tl(px(14.))
                             .border_t_1()
                             .border_l_1()
+                            // With the panel beside it the page is an island with both top
+                            // corners round; without, it runs to the window's edge.
+                            .when(discover, |this| this.rounded_tr(px(14.)).border_r_1())
                             .border_color(cx.theme().border)
                             .bg(cx.theme().muted)
                             .overflow_hidden()
                             .when(self.loading, |this| this.child(Loader))
                             .child(div().flex_1().min_h_0().child(page)),
-                    ),
+                    )
+                    .when(discover, |this| {
+                        this.child(crate::discover::render(self, self.feed.as_ref(), cx))
+                    }),
             )
     }
 }

@@ -405,7 +405,12 @@ fn pick(item: Item, shell: WeakEntity<Shell>, window: &mut Window, cx: &mut App)
 }
 
 /// The panel. `feed` is `None` while Steam is being asked.
-pub fn render(shell: &Shell, feed: Option<&Feed>, cx: &mut Context<Shell>) -> impl IntoElement {
+pub fn render(
+    shell: &Shell,
+    feed: Option<&Feed>,
+    scroll: &ScrollHandle,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
     let handle = cx.entity().downgrade();
     let panel = div()
         .flex()
@@ -455,6 +460,7 @@ pub fn render(shell: &Shell, feed: Option<&Feed>, cx: &mut Context<Shell>) -> im
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(scroll)
                 .child(trending_mods),
         )
 }

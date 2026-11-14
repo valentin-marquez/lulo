@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use gpui_kit::base::Spring;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::{App, Hsla};
+use gpui_kit::{App, Hsla, Pixels};
 
 pub use empty::Empty;
 pub use fancy_button::FancyButton;
@@ -109,6 +109,64 @@ pub fn secondary(id: &'static str, label: &'static str) -> gpui_kit::component::
         .h(px(36.))
         .px_3()
         .rounded(px(8.))
+}
+
+/// How fast a smoothed scroll closes the gap to where the wheel sent it: after this long,
+/// about two thirds of the way. Just enough to take the edge off a wheel notch (about 100 ms
+/// in all); at twice this it felt floaty, like the list lagged behind the hand.
+const SCROLL_EASE: f32 = 0.035;
+
+/// Where a smoothed scroll area is shown and where it is heading.
+#[derive(Default)]
+struct Smooth {
+    shown: Pixels,
+    target: Pixels,
+    /// What this helper last put in the handle; anything else there is a new jump.
+    set: Option<Pixels>,
+    at: Option<std::time::Instant>,
+}
+
+/// Eases the scroll area behind `handle` to where it was just sent, instead of jumping there.
+/// A mouse wheel moves in notches of several lines, which reads as rough; this keeps what is
+/// drawn sliding toward that spot (an exponential ease, so it never overshoots and a new
+/// notch mid-way just moves the goal). Call it from the render of whatever holds the area,
+/// with a `key` of its own.
+pub fn smooth_scroll(
+    key: &'static str,
+    handle: &gpui_kit::ScrollHandle,
+    window: &mut gpui_kit::Window,
+    cx: &mut App,
+) {
+    use gpui_kit::*;
+    let state = window.use_keyed_state(SharedString::from(key), cx, |_, _| Smooth::default());
+    let (now, offset) = (std::time::Instant::now(), handle.offset());
+    let (shown, settled) = state.update(cx, |smooth, _| {
+        if smooth.set != Some(offset.y) {
+            // Moved by the wheel, the scrollbar or the list itself: that is the new goal.
+            if smooth.set.is_none() {
+                smooth.shown = offset.y;
+            }
+            if smooth.shown == smooth.target {
+                // At rest until now: the ease starts on this frame, not on the stale clock.
+                smooth.at = Some(now);
+            }
+            smooth.target = offset.y;
+        }
+        let elapsed = now.duration_since(smooth.at.unwrap_or(now)).as_secs_f32();
+        smooth.at = Some(now);
+        let gap = smooth.target - smooth.shown;
+        if gap.abs() < px(0.5) {
+            smooth.shown = smooth.target;
+        } else {
+            smooth.shown += gap * (1. - (-elapsed.min(0.05) / SCROLL_EASE).exp());
+        }
+        smooth.set = Some(smooth.shown);
+        (smooth.shown, smooth.shown == smooth.target)
+    });
+    handle.set_offset(point(offset.x, shown));
+    if !settled {
+        window.request_animation_frame();
+    }
 }
 
 /// The tray a row of pill tabs sits in: the corners of an input, with its own fill and border,

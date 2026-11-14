@@ -47,6 +47,8 @@ pub struct Library {
     collapsed: HashSet<SharedString>,
     _search: Subscription,
     /// The search frame shows the focus ring, so focus changes repaint the library.
+    /// The instances area's scroll position, eased by `ui::smooth_scroll`.
+    scroll: ScrollHandle,
     _focus: [Subscription; 2],
 }
 
@@ -69,6 +71,7 @@ impl Library {
             sort: Sort::LastPlayed,
             grouped: true,
             collapsed: HashSet::new(),
+            scroll: ScrollHandle::new(),
             _search: on_search,
             _focus: on_focus,
         }
@@ -572,6 +575,7 @@ fn banner(total: usize, hero: Option<std::path::PathBuf>, cx: &App) -> Div {
 
 impl Render for Library {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::smooth_scroll("library-scroll", &self.scroll, window, cx);
         let shown = self.shown(cx);
         let total = self
             .shell
@@ -637,10 +641,20 @@ impl Render for Library {
             .size_full()
             .gap_4()
             .p_6()
-            .overflow_y_scroll()
+            // The banner and the toolbar stay put; only the instances below them scroll.
             .child(banner(total, hero, cx))
-            .child(self.toolbar(window, cx))
-            .child(body)
+            .child(div().flex_none().child(self.toolbar(window, cx)))
+            .child(
+                div()
+                    .id("library-instances")
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .child(body),
+            )
             // Right click on the page itself; a card's own menu wins over this one.
             .context_menu(move |menu, _, _| {
                 let (create, folder) = (handle.clone(), crate::instance::store::root());

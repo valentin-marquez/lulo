@@ -77,6 +77,8 @@ pub struct Mods {
     /// Folders of the checked rows.
     selected: HashSet<String>,
     shell: WeakEntity<Shell>,
+    /// The table's scroll position, eased by `ui::smooth_scroll`.
+    scroll: ScrollHandle,
     _search: Subscription,
 }
 
@@ -101,6 +103,7 @@ impl Mods {
             filter: Filter::All,
             selected: HashSet::new(),
             shell,
+            scroll: ScrollHandle::new(),
             _search: on_search,
         }
     }
@@ -575,7 +578,8 @@ impl Mods {
 }
 
 impl Render for Mods {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::smooth_scroll("mods-scroll", &self.scroll, window, cx);
         let adding = self
             .shell
             .read_with(cx, |shell, _| shell.adding_mods(&self.instance.id))
@@ -657,6 +661,7 @@ impl Render for Mods {
                         .flex_col()
                         .min_h_0()
                         .overflow_y_scroll()
+                        .track_scroll(&self.scroll)
                         .children(rows),
                 )
                 .into_any_element()

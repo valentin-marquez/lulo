@@ -45,6 +45,8 @@ pub struct Shell {
     running: HashMap<SharedString, std::process::Child>,
     /// News and trending mods for the panel on the right; `None` until Steam answers.
     feed: Option<crate::discover::Feed>,
+    /// Scroll position of the panel's trending list, eased by `ui::smooth_scroll`.
+    feed_scroll: ScrollHandle,
     /// Shows the loader under the title bar while the page's data loads.
     // ponytail: listing instances is instant; installs (roadmap 5) will set it.
     loading: bool,
@@ -72,6 +74,7 @@ impl Shell {
         .detach();
         let mut shell = Self {
             feed: None,
+            feed_scroll: ScrollHandle::new(),
             account: None,
             latest: HashMap::new(),
             installs: HashMap::new(),
@@ -671,6 +674,7 @@ impl Render for Shell {
             }
         };
 
+        crate::ui::smooth_scroll("discover-scroll", &self.feed_scroll, window, cx);
         // The panel on the right needs a window wide enough for it and the page.
         let discover = window.bounds().size.width >= crate::discover::MIN_WINDOW;
         div()
@@ -708,7 +712,12 @@ impl Render for Shell {
                             .child(div().flex_1().min_h_0().child(page)),
                     )
                     .when(discover, |this| {
-                        this.child(crate::discover::render(self, self.feed.as_ref(), cx))
+                        this.child(crate::discover::render(
+                            self,
+                            self.feed.as_ref(),
+                            &self.feed_scroll,
+                            cx,
+                        ))
                     }),
             )
     }

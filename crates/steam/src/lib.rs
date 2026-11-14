@@ -7,8 +7,10 @@ pub mod cm;
 pub mod content;
 pub mod directory;
 pub mod keyvalues;
+pub mod news;
 pub mod pics;
 pub mod profile;
+pub mod store;
 pub mod workshop;
 
 pub mod proto;

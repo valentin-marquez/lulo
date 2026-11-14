@@ -282,6 +282,9 @@ pub struct PublishedFileDetails {
     pub title: Option<String>,
     #[prost(uint32, optional, tag = "20")]
     pub time_updated: Option<u32>,
+    /// How many users are subscribed to it now.
+    #[prost(uint32, optional, tag = "36")]
+    pub subscriptions: Option<u32>,
     /// EWorkshopFileType: a collection is not a mod.
     #[prost(uint32, optional, tag = "34")]
     pub file_type: Option<u32>,
@@ -290,6 +293,35 @@ pub struct PublishedFileDetails {
     pub tags: Vec<PublishedFileTag>,
     #[prost(message, repeated, tag = "53")]
     pub children: Vec<PublishedFileChild>,
+}
+
+/// `PublishedFile.QueryFiles`: a page of an app's Workshop, ranked.
+#[derive(Clone, PartialEq, Message)]
+pub struct CPublishedFileQueryFilesRequest {
+    /// EPublishedFileQueryType; 3 ranks by trend over `days`.
+    #[prost(uint32, optional, tag = "1")]
+    pub query_type: Option<u32>,
+    #[prost(uint32, optional, tag = "2")]
+    pub page: Option<u32>,
+    #[prost(uint32, optional, tag = "3")]
+    pub numperpage: Option<u32>,
+    #[prost(uint32, optional, tag = "5")]
+    pub appid: Option<u32>,
+    /// EPublishedFileInfoMatchingFileType; 0 is plain items, which leaves collections out.
+    #[prost(uint32, optional, tag = "12")]
+    pub filetype: Option<u32>,
+    #[prost(uint32, optional, tag = "14")]
+    pub days: Option<u32>,
+    #[prost(bool, optional, tag = "18")]
+    pub return_tags: Option<bool>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+pub struct CPublishedFileQueryFilesResponse {
+    #[prost(uint32, optional, tag = "1")]
+    pub total: Option<u32>,
+    #[prost(message, repeated, tag = "2")]
+    pub publishedfiledetails: Vec<PublishedFileDetails>,
 }
 
 #[derive(Clone, PartialEq, Message)]

@@ -35,6 +35,8 @@ pub struct Item {
     pub preview: Option<String>,
     /// The Workshop items its author marked as required (for a collection, its items).
     pub requires: Vec<u64>,
+    /// How many users are subscribed to it now.
+    pub subscriptions: u32,
 }
 
 impl From<PublishedFileDetails> for Item {
@@ -49,6 +51,7 @@ impl From<PublishedFileDetails> for Item {
             tags: d.tags.iter().map(|t| t.tag().to_owned()).collect(),
             preview: d.preview_url.clone().filter(|url| is_steam_image(url)),
             requires: d.children.iter().map(|c| c.publishedfileid()).collect(),
+            subscriptions: d.subscriptions(),
             // Last: it moves out of `d`.
             file_url: d.file_url.filter(|u| !u.is_empty()),
         }
@@ -75,6 +78,31 @@ pub async fn details(client: &mut Client, ids: &[u64]) -> Result<Vec<Item>> {
     Ok(fetch(client, ids, true)
         .await?
         .into_iter()
+        .map(Item::from)
+        .collect())
+}
+
+/// `EPublishedFileQueryType::RankedByTrend`.
+const BY_TREND: u32 = 3;
+
+/// The `count` items of `app`'s Workshop that gained the most over the last `days`, most
+/// first. Collections are left out.
+pub async fn trending(client: &mut Client, app: u32, days: u32, count: u32) -> Result<Vec<Item>> {
+    let request = crate::proto::CPublishedFileQueryFilesRequest {
+        query_type: Some(BY_TREND),
+        page: Some(1),
+        numperpage: Some(count),
+        appid: Some(app),
+        filetype: Some(0),
+        days: Some(days),
+        return_tags: Some(true),
+    };
+    let reply: crate::proto::CPublishedFileQueryFilesResponse =
+        client.call("PublishedFile.QueryFiles", &request).await?;
+    Ok(reply
+        .publishedfiledetails
+        .into_iter()
+        .filter(|d| d.result() == OK && d.file_type() != COLLECTION)
         .map(Item::from)
         .collect())
 }

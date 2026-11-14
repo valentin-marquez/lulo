@@ -151,3 +151,46 @@ async fn refuses_a_made_up_password_login() {
         "{result:?}"
     );
 }
+
+/// The news and the trending mods the app's side panel shows.
+#[tokio::test]
+#[ignore = "needs network access to Steam"]
+async fn reads_the_news_and_the_trending_mods() {
+    let http = steam::http();
+    let posts = steam::news::announcements(&http, PROJECT_ZOMBOID, 5)
+        .await
+        .expect("the news loads");
+    eprintln!(
+        "{} posts, first: {:?}",
+        posts.len(),
+        posts.first().map(|p| &p.title)
+    );
+    assert!(!posts.is_empty());
+    assert!(
+        posts
+            .iter()
+            .all(|p| p.url.starts_with("https://") && p.date > 0)
+    );
+    assert!(
+        posts.windows(2).all(|pair| pair[0].date >= pair[1].date),
+        "newest first"
+    );
+
+    let mut client = steam::Client::anonymous(&http)
+        .await
+        .expect("anonymous logon");
+    let mods = steam::workshop::trending(&mut client, PROJECT_ZOMBOID, 7, 6)
+        .await
+        .expect("the trending mods load");
+    for item in &mods {
+        eprintln!(
+            "{} {} subs={} {:?}",
+            item.id, item.title, item.subscriptions, item.preview
+        );
+    }
+    assert!(!mods.is_empty());
+    assert!(
+        mods.iter()
+            .all(|m| m.app == PROJECT_ZOMBOID && !m.title.is_empty() && m.manifest != 0)
+    );
+}

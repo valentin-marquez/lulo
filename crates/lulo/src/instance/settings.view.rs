@@ -4,7 +4,8 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::DialogEntrance;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, WindowExt};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -12,10 +13,13 @@ use gpui_kit::*;
 
 use super::picture::{self, Picker};
 use super::{Icon, Instance, store};
-use crate::settings::{HEIGHT, NAV, WIDTH, heading};
+use crate::settings::{NAV, WIDTH, heading};
 use crate::shell::Shell;
 use crate::ui::{self, FancyButton};
 
+/// Taller than the app's settings: General and Game hold more than fits in its height, and a
+/// form that scrolls without saying so hides its last fields.
+const HEIGHT: f32 = 560.;
 /// Height shared by the buttons of the form.
 const CONTROL: Pixels = px(36.);
 /// What the game gives itself when nothing is set (`-Xmx3072m` in its launcher config).
@@ -28,23 +32,16 @@ pub enum Section {
     General,
     Customize,
     Game,
-    Advanced,
 }
 
 impl Section {
-    const ALL: [Section; 4] = [
-        Section::General,
-        Section::Customize,
-        Section::Game,
-        Section::Advanced,
-    ];
+    const ALL: [Section; 3] = [Section::General, Section::Customize, Section::Game];
 
     fn label(self) -> &'static str {
         match self {
             Section::General => "General",
             Section::Customize => "Customize",
             Section::Game => "Game",
-            Section::Advanced => "Advanced",
         }
     }
 
@@ -53,7 +50,6 @@ impl Section {
             Section::General => IconName::Settings,
             Section::Customize => IconName::Palette,
             Section::Game => IconName::Rocket,
-            Section::Advanced => IconName::Cpu,
         }
     }
 }
@@ -91,7 +87,13 @@ struct Settings {
     installed: u32,
     jvm_args: Entity<InputState>,
     launch_args: Entity<InputState>,
+    /// The section's scroll position, for the scrollbar that shows when a small window
+    /// still cuts the form short.
+    scroll: ScrollHandle,
     _slider_moved: Subscription,
+    /// Redraw as the fields and the picture change, so the footer can say there is
+    /// something to save.
+    _edits: Vec<Subscription>,
 }
 
 /// This computer's memory in whole GB.
@@ -167,7 +169,20 @@ impl Settings {
             this.memory_gb = Some(value.start().round() as u32);
             cx.notify();
         });
+        let mut edits: Vec<Subscription> = [&name, &jvm_args, &launch_args]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe(input, |_, _, event: &InputEvent, cx| {
+                    if let InputEvent::Change = event {
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
+        edits.push(cx.observe(&picture, |_, _, cx| cx.notify()));
         Self {
+            _edits: edits,
+            scroll: ScrollHandle::new(),
             memory_gb: instance.memory_gb,
             picture,
             name,
@@ -180,6 +195,17 @@ impl Settings {
             section,
             _slider_moved: moved,
         }
+    }
+
+    /// Whether anything shown differs from what the instance has saved.
+    fn dirty(&self, cx: &App) -> bool {
+        let text = |input: &Entity<InputState>| input.read(cx).value();
+        let instance = &self.instance;
+        text(&self.name).trim() != instance.name.as_ref()
+            || self.memory_gb != instance.memory_gb
+            || text(&self.jvm_args).trim() != instance.jvm_args
+            || text(&self.launch_args).trim() != instance.launch_args
+            || self.picture.read(cx).icon != instance.icon()
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -270,6 +296,70 @@ impl Settings {
             )
     }
 
+    /// What the instance runs and where it lives, with a way to its folder.
+    fn about(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let instance = &self.instance;
+        let build = match instance.build {
+            Some(build) => format!("Build {build}"),
+            None => "Not installed yet".to_owned(),
+        };
+        let fact = |name: &'static str, value: String| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .truncate()
+                        .child(value),
+                )
+        };
+        let dir = instance.dir.clone();
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .p_4()
+            .rounded(theme.radius_lg)
+            .bg(theme.group_box)
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex()
+                    .gap_8()
+                    .child(fact("Branch", instance.branch.to_string()))
+                    .child(fact("Game", build))
+                    .child(fact("Activity", instance.played())),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(fact("Folder", instance.dir.display().to_string()).flex_1())
+                    .child(
+                        Button::new("open-folder")
+                            .ghost()
+                            .cursor_pointer()
+                            .icon(IconName::FolderOpen)
+                            .label("Open")
+                            .on_click(move |_, _, cx| cx.open_with_system(&dir)),
+                    ),
+            )
+    }
+
     /// Deleting asks in the same dialog the Library's menu opens.
     fn danger(&self, cx: &mut Context<Self>) -> Div {
         let (shell, id) = (self.shell.clone(), self.instance.id.clone());
@@ -308,14 +398,19 @@ impl Render for Settings {
         let fields = div().flex().flex_col().gap_5();
         let (line, fields) = match self.section {
             Section::General => (
-                "The instance's name, and removing it.",
+                "What this instance is called and what it runs.",
                 fields
-                    .child(field(
-                        "Name",
-                        &self.name,
-                        "The folder on disk keeps its name.",
-                        cx,
-                    ))
+                    // A name is a few words: a field the width of the dialog looked lost.
+                    .child(
+                        field(
+                            "Name",
+                            &self.name,
+                            "Renaming keeps the folder on disk as it is.",
+                            cx,
+                        )
+                        .max_w(px(380.)),
+                    )
+                    .child(self.about(cx))
                     .child(self.danger(cx)),
             ),
             Section::Customize => (
@@ -324,21 +419,29 @@ impl Render for Settings {
             ),
             Section::Game => (
                 "How the game starts in this instance.",
-                fields.child(self.memory(cx)).child(field(
-                    "Launch arguments",
-                    &self.launch_args,
-                    "Options for the game, like -debug or -nosteam.",
-                    cx,
-                )),
-            ),
-            Section::Advanced => (
-                "Options most instances never need.",
-                fields.child(field(
-                    "Java arguments",
-                    &self.jvm_args,
-                    "Options for the Java VM the game runs on. A -Xmx here wins over Memory.",
-                    cx,
-                )),
+                fields
+                    .child(self.memory(cx))
+                    // The two argument fields are for the few who need them, so they sit
+                    // under their own heading and not in a section of one field each.
+                    .child(
+                        div()
+                            .pt_4()
+                            .border_t_1()
+                            .border_color(border)
+                            .child(title("Advanced")),
+                    )
+                    .child(field(
+                        "Launch arguments",
+                        &self.launch_args,
+                        "Options for the game, like -debug or -nosteam.",
+                        cx,
+                    ))
+                    .child(field(
+                        "Java arguments",
+                        &self.jvm_args,
+                        "Options for the Java VM the game runs on. A -Xmx here wins over Memory.",
+                        cx,
+                    )),
             ),
         };
         let content = div()
@@ -365,10 +468,21 @@ impl Render for Settings {
             }));
         let footer = div()
             .flex()
-            .justify_end()
+            .flex_none()
             .gap_2()
             .px_6()
-            .pb_4()
+            .py_3()
+            .border_t_1()
+            .border_color(border)
+            .items_center()
+            // Save keeps every section at once; this says so when one of them changed.
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .children(self.dirty(cx).then_some("You have unsaved changes")),
+            )
             .child(
                 ui::secondary("cancel", "Cancel").on_click(|_, window, cx| window.close_dialog(cx)),
             )
@@ -392,12 +506,19 @@ impl Render for Settings {
                     .min_w_0()
                     .child(
                         div()
-                            .id("instance-settings-content")
+                            .relative()
                             .flex_1()
                             .min_h_0()
-                            .p_6()
-                            .overflow_y_scroll()
-                            .child(ui::enter(content, self.section.label())),
+                            .child(
+                                div()
+                                    .id("instance-settings-content")
+                                    .size_full()
+                                    .p_6()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.scroll)
+                                    .child(ui::enter(content, self.section.label())),
+                            )
+                            .vertical_scrollbar(&self.scroll),
                     )
                     .child(footer),
             )

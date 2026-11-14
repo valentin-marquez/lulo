@@ -74,18 +74,25 @@ impl Picker {
             last_played: None,
             icon: Some(self.icon.clone()),
         };
+        // Beside the palette the buttons go under the picture, at its width; on their own
+        // (the create dialog) they sit beside it.
+        let full = self.full;
         let button = |id: &'static str, icon: IconName, label: &'static str| {
             Button::new(id)
                 .ghost()
                 .cursor_pointer()
                 .h(px(34.))
-                .w(px(148.))
+                .w(px(if full { ART } else { 148. }))
                 .icon(icon)
                 .label(label)
         };
         div()
             .flex()
-            .items_center()
+            .flex_none()
+            .map(|this| match full {
+                true => this.flex_col().items_start(),
+                false => this.items_center(),
+            })
             .gap_3()
             // Icon swap: a new picture fades in rising 4 px (GPUI can't scale or blur a box).
             .child(
@@ -230,12 +237,16 @@ impl Picker {
 
 impl Render for Picker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // With the palette: the picture on the left and its choices on the right, so both
+        // show at once without scrolling.
         div()
             .flex()
-            .flex_col()
-            .gap_4()
+            .items_start()
+            .gap_5()
             .child(self.preview(cx))
-            .when(self.full, |this| this.child(self.palette(cx)))
+            .when(self.full, |this| {
+                this.child(div().flex_1().min_w_0().child(self.palette(cx)))
+            })
     }
 }
 
